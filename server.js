@@ -422,47 +422,6 @@ const extraction = await openai.chat.completions.create({
   tool_choice: { type: 'function', function: { name: 'extract_intent' } },
   temperature: 0.3
 });
-    if (step < MAX_STEPS) {
-    
-              'Você é um classificador/estruturador. Sua única saída é chamar a tool extract_intent.',
-              'Não gere texto para o usuário.',
-              'Não invente dados. Se incerto, mantenha confidence baixa.',
-              'Taxonomia: intent_group + intent.',
-              'Use os slots definidos.',
-              'Contexto KB (referência de domínio):',
-              kbContext || 'SEM KB',
-              '',
-              fewShots,
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: envelope.message_text,
-          },
-        ],
-        tools: [tools[0]],
-        tool_choice: { type: 'function', function: { name: 'extract_intent' } },
-      });
-
-      // 🔧 CORREÇÃO: acessar choices[0].message.tool_calls
-      const call = extraction.choices[0]?.message?.tool_calls?.[0];
-      const parsedArgs = call?.function?.arguments
-        ? safeJsonParse(call.function.arguments)
-        : null;
-
-      if (!parsedArgs) {
-        return res.json({
-          correlation_id: envelope.correlation_id,
-          final_message:
-            'Entendi. Só para eu te ajudar: você quer marcar, remarcar ou cancelar uma consulta?',
-          actions: [],
-          debug: DEBUG ? { note: 'no_extract_tool_call' } : undefined,
-        });
-      }
-
-      extracted = parsedArgs;
-      step++;
-    }
 
     // ======================================================
     // 7) CONFIDENCE GUARD

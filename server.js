@@ -5,10 +5,25 @@ import { z } from 'zod';
 import pino from 'pino';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
+// ====== NOVAS LINHAS ======
+import path from 'path';
+import { fileURLToPath } from 'url';
+import adminRoutes from './routes/adminRoutes.js';
+
+// Para usar __dirname com ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+// ======================================================
+// PAINEL ADMINISTRATIVO (RECEPÇÃO)
+// ======================================================
+app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
+app.use('/admin', adminRoutes);
+```
 
 const log = pino({
   transport: { target: 'pino-pretty' },

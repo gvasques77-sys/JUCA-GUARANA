@@ -108,7 +108,7 @@ app.get('/process', (req, res) => {
   const wantsHtml = acceptHeader.includes('text/html');
 
   if (wantsHtml) {
-    return res.status(200).type('html').send(`<!doctype html>
+    return res.status(200).type('html').send(`<!doctype html>`
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />

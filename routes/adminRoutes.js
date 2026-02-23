@@ -13,17 +13,39 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_ROLE_KEY || 'missing'
 );
 
-// Senha do painel admin
-const AUTH_PASSWORD = process.env.ADMIN_PASSWORD || 'clinica123';
+// Senha do painel admin — sem fallback (JG-P0-004)
+const AUTH_PASSWORD = process.env.ADMIN_PASSWORD;
+if (!AUTH_PASSWORD) {
+    console.warn('⚠️  ADMIN_PASSWORD não definido — painel admin desabilitado');
+}
 
-// Middleware de autenticação
+// Validação UUID simples
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Middleware de autenticação + isolamento multi-tenant (JG-P0-004 + JG-P1-007)
 function checkAuth(req, res, next) {
+    if (!AUTH_PASSWORD) {
+        return res.status(503).json({
+            error: 'admin_not_configured',
+            message: 'Painel admin desabilitado. Defina ADMIN_PASSWORD no ambiente.',
+        });
+    }
+
     const authHeader = req.headers.authorization;
-    
     if (!authHeader || authHeader !== `Bearer ${AUTH_PASSWORD}`) {
         return res.status(401).json({ error: 'Não autorizado' });
     }
-    
+
+    // Multi-tenant: exige x-clinic-id em todos os requests (JG-P1-007)
+    const clinicId = req.headers['x-clinic-id'];
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+        return res.status(400).json({
+            error: 'missing_clinic_id',
+            message: 'Header x-clinic-id ausente ou inválido (UUID v4 requerido).',
+        });
+    }
+
+    req.clinicId = clinicId;
     next();
 }
 
@@ -43,28 +65,32 @@ router.get('/api/dashboard', checkAuth, async (req, res) => {
                 doctors (name),
                 services (name, price)
             `)
+            .eq('clinic_id', req.clinicId)
             .eq('appointment_date', hoje)
             .not('status', 'in', '("cancelled","no_show")')
             .order('start_time');
-        
+
         const { count: totalToday } = await supabase
             .from('appointments')
             .select('*', { count: 'exact', head: true })
+            .eq('clinic_id', req.clinicId)
             .eq('appointment_date', hoje)
             .not('status', 'eq', 'cancelled');
-        
+
         const { count: pendingConfirmation } = await supabase
             .from('appointments')
             .select('*', { count: 'exact', head: true })
+            .eq('clinic_id', req.clinicId)
             .eq('status', 'scheduled')
             .gte('appointment_date', hoje);
-        
+
         const nextWeek = new Date();
         nextWeek.setDate(nextWeek.getDate() + 7);
-        
+
         const { count: totalWeek } = await supabase
             .from('appointments')
             .select('*', { count: 'exact', head: true })
+            .eq('clinic_id', req.clinicId)
             .gte('appointment_date', hoje)
             .lte('appointment_date', nextWeek.toISOString().split('T')[0])
             .not('status', 'eq', 'cancelled');
@@ -106,10 +132,11 @@ router.get('/api/appointments', checkAuth, async (req, res) => {
                 doctors (id, name, specialty),
                 services (id, name, price, duration_minutes)
             `)
+            .eq('clinic_id', req.clinicId)
             .order('appointment_date', { ascending: true })
             .order('start_time', { ascending: true })
             .limit(limit);
-        
+
         if (date) query = query.eq('appointment_date', date);
         if (doctor_id) query = query.eq('doctor_id', doctor_id);
         if (status) query = query.eq('status', status);
@@ -147,15 +174,16 @@ router.post('/api/appointments', checkAuth, async (req, res) => {
             const { data: existingPatient } = await supabase
                 .from('patients')
                 .select('id')
+                .eq('clinic_id', req.clinicId)
                 .eq('phone', phoneNormalized)
                 .single();
-            
+
             if (existingPatient) {
                 patientId = existingPatient.id;
             } else if (patient_name) {
                 const { data: newPatient, error: createError } = await supabase
                     .from('patients')
-                    .insert({ name: patient_name, phone: phoneNormalized })
+                    .insert({ name: patient_name, phone: phoneNormalized, clinic_id: req.clinicId })
                     .select()
                     .single();
                 
@@ -171,6 +199,7 @@ router.post('/api/appointments', checkAuth, async (req, res) => {
         const { data: service } = await supabase
             .from('services')
             .select('duration_minutes, price')
+            .eq('clinic_id', req.clinicId)
             .eq('id', service_id)
             .single();
         
@@ -186,6 +215,7 @@ router.post('/api/appointments', checkAuth, async (req, res) => {
         const { data: appointment, error: createError } = await supabase
             .from('appointments')
             .insert({
+                clinic_id: req.clinicId,
                 patient_id: patientId,
                 doctor_id,
                 service_id,
@@ -195,7 +225,7 @@ router.post('/api/appointments', checkAuth, async (req, res) => {
                 status: 'scheduled',
                 price: service.price,
                 notes,
-                created_by: 'admin'
+                created_by: 'admin',
             })
             .select(`
                 *,
@@ -242,6 +272,7 @@ router.patch('/api/appointments/:id', checkAuth, async (req, res) => {
         const { data, error } = await supabase
             .from('appointments')
             .update(filteredUpdates)
+            .eq('clinic_id', req.clinicId)
             .eq('id', id)
             .select()
             .single();
@@ -266,8 +297,9 @@ router.delete('/api/appointments/:id', checkAuth, async (req, res) => {
             .update({
                 status: 'cancelled',
                 cancellation_reason: reason || 'Cancelado pela recepção',
-                cancelled_by: 'admin'
+                cancelled_by: 'admin',
             })
+            .eq('clinic_id', req.clinicId)
             .eq('id', id)
             .select()
             .single();
@@ -291,6 +323,7 @@ router.get('/api/doctors', checkAuth, async (req, res) => {
         const { data, error } = await supabase
             .from('doctors')
             .select('*')
+            .eq('clinic_id', req.clinicId)
             .order('name');
         
         if (error) throw error;
@@ -314,6 +347,7 @@ router.get('/api/patients', checkAuth, async (req, res) => {
         let query = supabase
             .from('patients')
             .select('*')
+            .eq('clinic_id', req.clinicId)
             .order('name')
             .limit(limit);
         
@@ -345,7 +379,7 @@ router.post('/api/patients', checkAuth, async (req, res) => {
         
         const { data, error } = await supabase
             .from('patients')
-            .insert({ name, phone: phoneNormalized, email, birth_date, notes })
+            .insert({ clinic_id: req.clinicId, name, phone: phoneNormalized, email, birth_date, notes })
             .select()
             .single();
         
@@ -373,6 +407,7 @@ router.get('/api/services', checkAuth, async (req, res) => {
         const { data, error } = await supabase
             .from('services')
             .select('*')
+            .eq('clinic_id', req.clinicId)
             .eq('active', true)
             .order('name');
         

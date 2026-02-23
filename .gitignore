@@ -3,6 +3,9 @@ node_modules/
 
 # Variáveis de ambiente (NUNCA compartilhar)
 .env
+_env
+*.env.local
+*.env.production
 
 # Sistema operacional
 .DS_Store

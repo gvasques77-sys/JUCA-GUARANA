@@ -23,7 +23,6 @@ app.use(express.json({ limit: '1mb' }));
 // ======================================================
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminRoutes);
-```
 
 const log = pino({
   transport: { target: 'pino-pretty' },
@@ -64,6 +63,13 @@ const EnvelopeSchema = z.object({
   message_text: z.string().min(1),
   phone_number_id: z.string().optional(),
   received_at_iso: z.string().optional(),
+  context: z
+    .object({
+      previous_messages: z
+        .array(z.object({ role: z.string(), content: z.string() }))
+        .optional(),
+    })
+    .optional(),
 });
 
 const fallbackClinicId = '09e5240f-9c26-47ee-a54d-02934a36ebfd';
@@ -81,6 +87,32 @@ const sampleEnvelope = {
   phone_number_id: 'whatsapp-123',
   received_at_iso: '2026-02-16T20:00:00.000Z',
 };
+
+// ======================================================
+// AUTENTICAÇÃO DO /process (JG-P0-004)
+// ======================================================
+const AGENT_API_KEY = process.env.AGENT_API_KEY;
+if (!AGENT_API_KEY) {
+  log.warn('⚠️  AGENT_API_KEY não definido — /process está aberto (apenas dev)');
+}
+
+function checkAgentAuth(req, res, next) {
+  if (!AGENT_API_KEY) return next(); // dev mode sem key: permite
+
+  const key =
+    req.headers['x-api-key'] ||
+    (req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : null);
+
+  if (!key || key !== AGENT_API_KEY) {
+    return res.status(401).json({
+      error: 'unauthorized',
+      message: 'x-api-key ou Authorization: Bearer <token> requerido.',
+    });
+  }
+  next();
+}
 
 // ======================================================
 // ROTA DE HEALTH CHECK
@@ -108,7 +140,7 @@ app.get('/process', (req, res) => {
   const wantsHtml = acceptHeader.includes('text/html');
 
   if (wantsHtml) {
-    return res.status(200).type('html').send(`<!doctype html>`
+    return res.status(200).type('html').send(`<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
@@ -187,7 +219,7 @@ app.get('/process', (req, res) => {
 // ======================================================
 // ROTA PRINCIPAL: /process
 // ======================================================
-app.post('/process', async (req, res) => {
+app.post('/process', checkAgentAuth, async (req, res) => {
   const started = Date.now();
   const DEBUG = process.env.DEBUG === 'true';
   const MAX_STEPS = Number(process.env.AGENT_MAX_STEPS || 2);
@@ -212,6 +244,10 @@ app.post('/process', async (req, res) => {
       return null;
     }
   };
+
+  // AbortController para timeout total da requisição (JG-P2-008)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GLOBAL_TIMEOUT_MS);
 
   try {
     // ======================================================
@@ -430,18 +466,33 @@ const messages = [
 // NOVO: Log para debug
 console.log(`📜 Histórico: ${previousMessages.length} mensagens anteriores`);
 
-const extraction = await openai.chat.completions.create({
-  model: OPENAI_MODEL,
-  messages: messages,
-  tools: [extractionTool],
-  tool_choice: { type: 'function', function: { name: 'extract_intent' } },
-  temperature: 0.3
-});
+const extraction = await openai.chat.completions.create(
+  {
+    model: OPENAI_MODEL,
+    messages: messages,
+    tools: [tools[0]],
+    tool_choice: { type: 'function', function: { name: 'extract_intent' } },
+    temperature: 0.3,
+  },
+  { signal: controller.signal }
+);
+
+// Parse resultado da extração (JG-P0-002)
+const callExtract = extraction.choices[0]?.message?.tool_calls?.[0];
+extracted = callExtract?.function?.arguments
+  ? safeJsonParse(callExtract.function.arguments)
+  : null;
+step++;
+
+if (DEBUG) {
+  log.debug({ extracted }, 'extraction_result');
+}
 
     // ======================================================
     // 7) CONFIDENCE GUARD
     // ======================================================
     if (!extracted || extracted.confidence < 0.6) {
+      clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
         final_message:
@@ -455,32 +506,34 @@ const extraction = await openai.chat.completions.create({
     // 8) STEP 1: decide_next_action
     // ======================================================
     if (step < MAX_STEPS) {
-      // 🔧 CORREÇÃO: usar chat.completions.create (API CORRETA)
-      const decision = await openai.chat.completions.create({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'Você decide o próximo passo (policy). Sua única saída é chamar decide_next_action.',
-              'Não invente agenda. Não confirme horário.',
-              `Regra crítica: allow_prices=${clinicRules.allow_prices}.`,
-              'Se o paciente pedir preço e allow_prices=false: decision_type=block_price.',
-              'Se faltar dado essencial: decision_type=ask_missing com pergunta mínima.',
-              'Use KB quando relevante (sem inventar).',
-              'Responda em pt-BR e mensagem curta.',
-              'KB:',
-              kbContext || 'SEM KB',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({ extracted }),
-          },
-        ],
-        tools: [tools[1]],
-        tool_choice: { type: 'function', function: { name: 'decide_next_action' } },
-      });
+      const decision = await openai.chat.completions.create(
+        {
+          model: OPENAI_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: [
+                'Você decide o próximo passo (policy). Sua única saída é chamar decide_next_action.',
+                'Não invente agenda. Não confirme horário.',
+                `Regra crítica: allow_prices=${clinicRules.allow_prices}.`,
+                'Se o paciente pedir preço e allow_prices=false: decision_type=block_price.',
+                'Se faltar dado essencial: decision_type=ask_missing com pergunta mínima.',
+                'Use KB quando relevante (sem inventar).',
+                'Responda em pt-BR e mensagem curta.',
+                'KB:',
+                kbContext || 'SEM KB',
+              ].join('\n'),
+            },
+            {
+              role: 'user',
+              content: JSON.stringify({ extracted }),
+            },
+          ],
+          tools: [tools[1]],
+          tool_choice: { type: 'function', function: { name: 'decide_next_action' } },
+        },
+        { signal: controller.signal }
+      );
 
       // 🔧 CORREÇÃO: acessar choices[0].message.tool_calls
       const call = decision.choices[0]?.message?.tool_calls?.[0];
@@ -500,6 +553,16 @@ const extraction = await openai.chat.completions.create({
       }
 
       step++;
+    }
+
+    // Fallback: garantir que decided sempre está definido (JG-P0-002)
+    if (!decided) {
+      decided = {
+        decision_type: 'ask_missing',
+        message: 'Desculpe, não consegui processar sua solicitação. Pode fornecer mais detalhes?',
+        actions: [{ type: 'log' }],
+        confidence: 0.5,
+      };
     }
 
     // ======================================================
@@ -538,6 +601,7 @@ const extraction = await openai.chat.completions.create({
     // ======================================================
     // 11) RESPOSTA FINAL
     // ======================================================
+    clearTimeout(timeoutId);
     return res.json({
       correlation_id: envelope.correlation_id,
       final_message: decided.message,
@@ -552,9 +616,10 @@ const extraction = await openai.chat.completions.create({
         : undefined,
     });
   } catch (err) {
+    clearTimeout(timeoutId);
     const errName = err?.name || 'UnknownError';
     const errMessage = err?.message || String(err);
-    
+
     log.error(
       {
         err_name: errName,

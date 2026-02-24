@@ -50,6 +50,16 @@ function checkAuth(req, res, next) {
 }
 
 // ============================================================
+// INFO PÚBLICA DA CLÍNICA (sem autenticação — JG-P1-007)
+// Retorna o DEFAULT_CLINIC_ID para o painel admin auto-preencher
+// ============================================================
+
+router.get('/api/clinic-info', (req, res) => {
+    const clinicId = process.env.DEFAULT_CLINIC_ID || '';
+    res.json({ clinic_id: clinicId });
+});
+
+// ============================================================
 // DASHBOARD
 // ============================================================
 

@@ -58,21 +58,21 @@ function generateTimeSlots(startTime, endTime, slotDuration) {
     const slots = [];
     const [startHour, startMin] = startTime.split(':').map(Number);
     const [endHour, endMin] = endTime.split(':').map(Number);
-    
+
     let currentHour = startHour;
     let currentMin = startMin;
-    
+
     while (currentHour < endHour || (currentHour === endHour && currentMin < endMin)) {
         const timeStr = `${currentHour.toString().padStart(2, '0')}:${currentMin.toString().padStart(2, '0')}`;
         slots.push(timeStr);
-        
+
         currentMin += slotDuration;
         if (currentMin >= 60) {
             currentHour += Math.floor(currentMin / 60);
             currentMin = currentMin % 60;
         }
     }
-    
+
     return slots;
 }
 
@@ -86,9 +86,11 @@ function getDayOfWeek(dateStr) {
 // ============================================================
 
 /**
- * Lista médicos/profissionais
+ * Lista médicos/profissionais da clínica
+ * @param {string} clinicId - UUID da clínica (obrigatório para isolamento multi-tenant)
+ * @param {string|null} specialty - filtro de especialidade opcional
  */
-export async function listarMedicos(specialty = null) {
+export async function listarMedicos(clinicId, specialty = null) {
     try {
         let query = supabase
             .from('doctors')
@@ -101,34 +103,35 @@ export async function listarMedicos(specialty = null) {
                     services (id, name, price, duration_minutes)
                 )
             `)
+            .eq('clinic_id', clinicId)
             .eq('active', true)
             .order('name');
-        
+
         if (specialty) {
             query = query.ilike('specialty', `%${specialty}%`);
         }
-        
+
         const { data: doctors, error } = await query;
-        
+
         if (error) throw error;
-        
+
         if (!doctors || doctors.length === 0) {
             return {
                 success: true,
-                message: specialty 
+                message: specialty
                     ? `Não encontrei médicos com a especialidade "${specialty}".`
                     : 'Não há médicos cadastrados no momento.',
                 doctors: []
             };
         }
-        
+
         const medicosFormatados = doctors.map(doc => ({
             id: doc.id,
             nome: doc.name,
             especialidade: doc.specialty || 'Clínico Geral',
             bio: doc.bio
         }));
-        
+
         let mensagem = '👨‍⚕️ **Nossos Profissionais:**\n\n';
         medicosFormatados.forEach((med, idx) => {
             mensagem += `${idx + 1}. **${med.nome}**\n`;
@@ -136,9 +139,9 @@ export async function listarMedicos(specialty = null) {
             if (med.bio) mensagem += `   ℹ️ ${med.bio}\n`;
             mensagem += '\n';
         });
-        
+
         return { success: true, message: mensagem, doctors: medicosFormatados };
-        
+
     } catch (error) {
         console.error('Erro ao listar médicos:', error);
         return { success: false, message: 'Erro ao buscar médicos.', error: error.message };
@@ -146,44 +149,48 @@ export async function listarMedicos(specialty = null) {
 }
 
 /**
- * Lista serviços
+ * Lista serviços da clínica
+ * @param {string} clinicId - UUID da clínica (obrigatório para isolamento multi-tenant)
+ * @param {string|null} doctorId - filtra serviços por médico específico
  */
-export async function listarServicos(doctorId = null) {
+export async function listarServicos(clinicId, doctorId = null) {
     try {
         let query;
-        
+
         if (doctorId) {
             query = supabase
                 .from('doctor_services')
                 .select(`services (id, name, description, duration_minutes, price)`)
+                .eq('clinic_id', clinicId)
                 .eq('doctor_id', doctorId);
         } else {
             query = supabase
                 .from('services')
                 .select('*')
+                .eq('clinic_id', clinicId)
                 .eq('active', true)
                 .order('name');
         }
-        
+
         const { data, error } = await query;
         if (error) throw error;
-        
-        const servicos = doctorId 
+
+        const servicos = doctorId
             ? data.map(d => d.services).filter(Boolean)
             : data;
-        
+
         if (!servicos || servicos.length === 0) {
             return { success: true, message: 'Não há serviços disponíveis.', services: [] };
         }
-        
+
         let mensagem = '💆 **Serviços Disponíveis:**\n\n';
         servicos.forEach((serv, idx) => {
             mensagem += `${idx + 1}. **${serv.name}**\n`;
             mensagem += `   ⏱️ ${serv.duration_minutes} min | 💰 ${formatCurrency(serv.price)}\n\n`;
         });
-        
+
         return { success: true, message: mensagem, services: servicos };
-        
+
     } catch (error) {
         console.error('Erro ao listar serviços:', error);
         return { success: false, message: 'Erro ao buscar serviços.', error: error.message };
@@ -191,41 +198,46 @@ export async function listarServicos(doctorId = null) {
 }
 
 /**
- * Verifica disponibilidade
+ * Verifica disponibilidade de horários para um médico em uma data
+ * @param {string} clinicId - UUID da clínica (obrigatório para isolamento multi-tenant)
+ * @param {string} doctorId - UUID do médico
+ * @param {string} date - data no formato YYYY-MM-DD
  */
-export async function verificarDisponibilidade(doctorId, date) {
+export async function verificarDisponibilidade(clinicId, doctorId, date) {
     try {
         const dateObj = new Date(date + 'T12:00:00');
         const hoje = new Date();
         hoje.setHours(0, 0, 0, 0);
-        
+
         if (dateObj < hoje) {
             return { success: false, message: 'Não é possível agendar para datas passadas.' };
         }
-        
+
         const dayOfWeek = getDayOfWeek(date);
-        
-        // Buscar médico
+
+        // Buscar médico (validando que pertence à clínica)
         const { data: doctor, error: doctorError } = await supabase
             .from('doctors')
             .select('id, name, specialty')
             .eq('id', doctorId)
+            .eq('clinic_id', clinicId)
             .single();
-        
+
         if (doctorError || !doctor) {
             return { success: false, message: 'Médico não encontrado.' };
         }
-        
-        // Buscar horários
+
+        // Buscar horários do médico para o dia da semana
         const { data: schedules, error: scheduleError } = await supabase
             .from('schedules')
             .select('*')
             .eq('doctor_id', doctorId)
+            .eq('clinic_id', clinicId)
             .eq('day_of_week', dayOfWeek)
             .eq('active', true);
-        
+
         if (scheduleError) throw scheduleError;
-        
+
         if (!schedules || schedules.length === 0) {
             return {
                 success: true,
@@ -234,15 +246,16 @@ export async function verificarDisponibilidade(doctorId, date) {
                 doctor: doctor
             };
         }
-        
-        // Verificar bloqueios
+
+        // Verificar bloqueios de agenda
         const { data: blocks } = await supabase
             .from('schedule_blocks')
             .select('*')
+            .eq('clinic_id', clinicId)
             .or(`doctor_id.eq.${doctorId},doctor_id.is.null`)
             .lte('start_date', date)
             .gte('end_date', date);
-        
+
         if (blocks && blocks.length > 0) {
             return {
                 success: true,
@@ -251,8 +264,8 @@ export async function verificarDisponibilidade(doctorId, date) {
                 doctor: doctor
             };
         }
-        
-        // Gerar slots
+
+        // Gerar todos os slots de horário
         let allSlots = [];
         for (const schedule of schedules) {
             const slots = generateTimeSlots(
@@ -262,22 +275,23 @@ export async function verificarDisponibilidade(doctorId, date) {
             );
             allSlots = [...allSlots, ...slots];
         }
-        
-        // Buscar agendamentos existentes
+
+        // Buscar agendamentos já existentes na data para subtrair slots ocupados
         const { data: appointments } = await supabase
             .from('appointments')
             .select('start_time')
+            .eq('clinic_id', clinicId)
             .eq('doctor_id', doctorId)
             .eq('appointment_date', date)
             .not('status', 'in', '("cancelled","no_show")');
-        
+
         const occupiedSlots = new Set(
             appointments?.map(a => formatTime(a.start_time)) || []
         );
-        
+
         let availableSlots = allSlots.filter(slot => !occupiedSlots.has(slot));
-        
-        // Se for hoje, remover horários passados
+
+        // Se for hoje, remover horários passados (+30 min de buffer)
         const todayStr = hoje.toISOString().split('T')[0];
         if (date === todayStr) {
             const agora = new Date();
@@ -287,7 +301,7 @@ export async function verificarDisponibilidade(doctorId, date) {
                 return (h * 60 + m) > horaAtual + 30;
             });
         }
-        
+
         if (availableSlots.length === 0) {
             return {
                 success: true,
@@ -296,7 +310,7 @@ export async function verificarDisponibilidade(doctorId, date) {
                 doctor: doctor
             };
         }
-        
+
         // Agrupar por período
         const manha = availableSlots.filter(s => parseInt(s.split(':')[0]) < 12);
         const tarde = availableSlots.filter(s => {
@@ -304,17 +318,17 @@ export async function verificarDisponibilidade(doctorId, date) {
             return h >= 12 && h < 18;
         });
         const noite = availableSlots.filter(s => parseInt(s.split(':')[0]) >= 18);
-        
+
         let mensagem = `📅 **Horários disponíveis**\n`;
         mensagem += `👨‍⚕️ ${doctor.name}\n`;
         mensagem += `📆 ${DIAS_SEMANA[dayOfWeek]}, ${formatDate(date)}\n\n`;
-        
+
         if (manha.length > 0) mensagem += `☀️ **Manhã:** ${manha.join(', ')}\n`;
         if (tarde.length > 0) mensagem += `🌤️ **Tarde:** ${tarde.join(', ')}\n`;
         if (noite.length > 0) mensagem += `🌙 **Noite:** ${noite.join(', ')}\n`;
-        
+
         mensagem += `\nQual horário você prefere?`;
-        
+
         return {
             success: true,
             message: mensagem,
@@ -322,7 +336,7 @@ export async function verificarDisponibilidade(doctorId, date) {
             doctor: doctor,
             date: date
         };
-        
+
     } catch (error) {
         console.error('Erro ao verificar disponibilidade:', error);
         return { success: false, message: 'Erro ao verificar disponibilidade.', error: error.message };
@@ -330,20 +344,23 @@ export async function verificarDisponibilidade(doctorId, date) {
 }
 
 /**
- * Busca próximas datas disponíveis
+ * Busca próximas datas disponíveis para um médico
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} doctorId - UUID do médico
+ * @param {number} days - quantos dias verificar (padrão 14)
  */
-export async function buscarProximasDatasDisponiveis(doctorId, days = 14) {
+export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 14) {
     try {
         const datasDisponiveis = [];
         const hoje = new Date();
-        
+
         for (let i = 0; i < days; i++) {
             const data = new Date(hoje);
             data.setDate(data.getDate() + i);
             const dateStr = data.toISOString().split('T')[0];
-            
-            const resultado = await verificarDisponibilidade(doctorId, dateStr);
-            
+
+            const resultado = await verificarDisponibilidade(clinicId, doctorId, dateStr);
+
             if (resultado.success && resultado.available_slots?.length > 0) {
                 datasDisponiveis.push({
                     date: dateStr,
@@ -352,10 +369,10 @@ export async function buscarProximasDatasDisponiveis(doctorId, days = 14) {
                     slots_count: resultado.available_slots.length
                 });
             }
-            
+
             if (datasDisponiveis.length >= 5) break;
         }
-        
+
         if (datasDisponiveis.length === 0) {
             return {
                 success: true,
@@ -363,16 +380,16 @@ export async function buscarProximasDatasDisponiveis(doctorId, days = 14) {
                 dates: []
             };
         }
-        
+
         let mensagem = `📅 **Próximas datas disponíveis:**\n\n`;
         datasDisponiveis.forEach((d, idx) => {
             mensagem += `${idx + 1}. **${d.day_of_week}, ${d.formatted_date}**\n`;
             mensagem += `   ⏰ ${d.slots_count} horários disponíveis\n\n`;
         });
         mensagem += `Qual data você prefere?`;
-        
+
         return { success: true, message: mensagem, dates: datasDisponiveis };
-        
+
     } catch (error) {
         console.error('Erro ao buscar datas:', error);
         return { success: false, message: 'Erro ao buscar datas.', error: error.message };
@@ -380,39 +397,43 @@ export async function buscarProximasDatasDisponiveis(doctorId, days = 14) {
 }
 
 /**
- * Obtém ou cria paciente
+ * Obtém ou cria paciente na clínica
+ * @param {string} clinicId - UUID da clínica (obrigatório para isolamento multi-tenant)
+ * @param {string} phone - telefone do paciente
+ * @param {string|null} name - nome do paciente (necessário para criação)
  */
-export async function obterOuCriarPaciente(phone, name = null) {
+export async function obterOuCriarPaciente(clinicId, phone, name = null) {
     try {
         const phoneNormalized = phone.replace(/\D/g, '');
-        
+
         const { data: existingPatient } = await supabase
             .from('patients')
             .select('*')
+            .eq('clinic_id', clinicId)
             .eq('phone', phoneNormalized)
-            .single();
-        
+            .maybeSingle();
+
         if (existingPatient) {
             return { success: true, patient: existingPatient, isNew: false };
         }
-        
+
         if (name) {
             const { data: newPatient, error } = await supabase
                 .from('patients')
-                .insert({ phone: phoneNormalized, name: name })
+                .insert({ clinic_id: clinicId, phone: phoneNormalized, name: name })
                 .select()
                 .single();
-            
+
             if (error) throw error;
             return { success: true, patient: newPatient, isNew: true };
         }
-        
+
         return {
             success: false,
             needsRegistration: true,
             message: 'Para agendar, preciso do seu nome completo. Como você se chama?'
         };
-        
+
     } catch (error) {
         console.error('Erro ao obter/criar paciente:', error);
         return { success: false, message: 'Erro ao processar cadastro.', error: error.message };
@@ -420,48 +441,50 @@ export async function obterOuCriarPaciente(phone, name = null) {
 }
 
 /**
- * Cria agendamento
+ * Cria agendamento na clínica
  */
 export async function criarAgendamento(params) {
-    const { patientPhone, patientName, doctorId, serviceId, date, time, notes = null } = params;
-    
+    const { clinicId, patientPhone, patientName, doctorId, serviceId, date, time, notes = null } = params;
+
     try {
-        // Obter/criar paciente
-        const patientResult = await obterOuCriarPaciente(patientPhone, patientName);
+        // Obter/criar paciente (vinculado à clínica)
+        const patientResult = await obterOuCriarPaciente(clinicId, patientPhone, patientName);
         if (!patientResult.success) return patientResult;
-        
+
         const patient = patientResult.patient;
-        
-        // Verificar disponibilidade
-        const disponibilidade = await verificarDisponibilidade(doctorId, date);
+
+        // Verificar disponibilidade real (double-check para evitar race condition)
+        const disponibilidade = await verificarDisponibilidade(clinicId, doctorId, date);
         if (!disponibilidade.success || !disponibilidade.available_slots?.includes(time)) {
             return {
                 success: false,
                 message: 'Este horário não está mais disponível. Por favor, escolha outro.'
             };
         }
-        
-        // Buscar serviço
+
+        // Buscar serviço (validando que pertence à clínica)
         const { data: service, error: serviceError } = await supabase
             .from('services')
             .select('*')
             .eq('id', serviceId)
+            .eq('clinic_id', clinicId)
             .single();
-        
+
         if (serviceError || !service) {
             return { success: false, message: 'Serviço não encontrado.' };
         }
-        
+
         // Calcular horário de término
         const [hours, minutes] = time.split(':').map(Number);
         const endDate = new Date(2000, 0, 1, hours, minutes);
         endDate.setMinutes(endDate.getMinutes() + service.duration_minutes);
         const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        
-        // Criar agendamento
+
+        // Criar agendamento (incluindo clinic_id para multi-tenância)
         const { data: appointment, error: createError } = await supabase
             .from('appointments')
             .insert({
+                clinic_id: clinicId,
                 patient_id: patient.id,
                 doctor_id: doctorId,
                 service_id: serviceId,
@@ -480,14 +503,14 @@ export async function criarAgendamento(params) {
                 patients (name, phone)
             `)
             .single();
-        
+
         if (createError) {
             if (createError.code === '23505') {
                 return { success: false, message: 'Este horário acabou de ser reservado.' };
             }
             throw createError;
         }
-        
+
         const mensagem = `
 ✅ **Agendamento Confirmado!**
 
@@ -505,9 +528,9 @@ export async function criarAgendamento(params) {
 
 Posso ajudar com mais alguma coisa?
         `.trim();
-        
+
         return { success: true, message: mensagem, appointment: appointment };
-        
+
     } catch (error) {
         console.error('Erro ao criar agendamento:', error);
         return { success: false, message: 'Erro ao criar agendamento.', error: error.message };
@@ -516,21 +539,25 @@ Posso ajudar com mais alguma coisa?
 
 /**
  * Lista agendamentos do paciente
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} patientPhone - telefone do paciente
+ * @param {string|null} status - filtro de status opcional
  */
-export async function listarAgendamentosPaciente(patientPhone, status = null) {
+export async function listarAgendamentosPaciente(clinicId, patientPhone, status = null) {
     try {
         const phoneNormalized = patientPhone.replace(/\D/g, '');
-        
+
         const { data: patient } = await supabase
             .from('patients')
             .select('id, name')
+            .eq('clinic_id', clinicId)
             .eq('phone', phoneNormalized)
-            .single();
-        
+            .maybeSingle();
+
         if (!patient) {
             return { success: true, message: 'Você ainda não tem agendamentos.', appointments: [] };
         }
-        
+
         let query = supabase
             .from('appointments')
             .select(`
@@ -538,24 +565,25 @@ export async function listarAgendamentosPaciente(patientPhone, status = null) {
                 doctors (name, specialty),
                 services (name, price)
             `)
+            .eq('clinic_id', clinicId)
             .eq('patient_id', patient.id)
             .gte('appointment_date', new Date().toISOString().split('T')[0])
             .order('appointment_date', { ascending: true })
             .order('start_time', { ascending: true });
-        
+
         if (status) {
             query = query.eq('status', status);
         } else {
             query = query.not('status', 'in', '("cancelled","no_show","completed")');
         }
-        
+
         const { data: appointments, error } = await query;
         if (error) throw error;
-        
+
         if (!appointments || appointments.length === 0) {
             return { success: true, message: 'Você não tem consultas agendadas.', appointments: [] };
         }
-        
+
         let mensagem = `📋 **Suas Consultas:**\n\n`;
         appointments.forEach((apt, idx) => {
             mensagem += `${idx + 1}. **${apt.services.name}**\n`;
@@ -563,11 +591,11 @@ export async function listarAgendamentosPaciente(patientPhone, status = null) {
             mensagem += `   📅 ${formatDate(apt.appointment_date)} às ${formatTime(apt.start_time)}\n`;
             mensagem += `   📌 ${STATUS_LABELS[apt.status] || apt.status}\n\n`;
         });
-        
+
         mensagem += `Para cancelar ou remarcar, me avise!`;
-        
+
         return { success: true, message: mensagem, appointments: appointments, patient: patient };
-        
+
     } catch (error) {
         console.error('Erro ao listar agendamentos:', error);
         return { success: false, message: 'Erro ao buscar agendamentos.', error: error.message };
@@ -576,8 +604,12 @@ export async function listarAgendamentosPaciente(patientPhone, status = null) {
 
 /**
  * Cancela agendamento
+ * @param {string} clinicId - UUID da clínica (valida que o agendamento pertence a esta clínica)
+ * @param {string} appointmentId - UUID do agendamento
+ * @param {string|null} reason - motivo do cancelamento
+ * @param {string} cancelledBy - quem cancelou ('patient' ou 'admin')
  */
-export async function cancelarAgendamento(appointmentId, reason = null, cancelledBy = 'patient') {
+export async function cancelarAgendamento(clinicId, appointmentId, reason = null, cancelledBy = 'patient') {
     try {
         const { data: appointment, error: fetchError } = await supabase
             .from('appointments')
@@ -588,20 +620,21 @@ export async function cancelarAgendamento(appointmentId, reason = null, cancelle
                 patients (name, phone)
             `)
             .eq('id', appointmentId)
+            .eq('clinic_id', clinicId)
             .single();
-        
+
         if (fetchError || !appointment) {
             return { success: false, message: 'Agendamento não encontrado.' };
         }
-        
+
         if (appointment.status === 'cancelled') {
             return { success: false, message: 'Este agendamento já foi cancelado.' };
         }
-        
+
         if (appointment.status === 'completed') {
             return { success: false, message: 'Não é possível cancelar consulta já realizada.' };
         }
-        
+
         await supabase
             .from('appointments')
             .update({
@@ -609,8 +642,9 @@ export async function cancelarAgendamento(appointmentId, reason = null, cancelle
                 cancellation_reason: reason,
                 cancelled_by: cancelledBy
             })
-            .eq('id', appointmentId);
-        
+            .eq('id', appointmentId)
+            .eq('clinic_id', clinicId);
+
         const mensagem = `
 ❌ **Agendamento Cancelado**
 
@@ -621,9 +655,9 @@ ${reason ? `\n📝 Motivo: ${reason}` : ''}
 
 Se desejar reagendar, é só me avisar!
         `.trim();
-        
+
         return { success: true, message: mensagem, appointment: appointment };
-        
+
     } catch (error) {
         console.error('Erro ao cancelar:', error);
         return { success: false, message: 'Erro ao cancelar.', error: error.message };
@@ -631,28 +665,31 @@ Se desejar reagendar, é só me avisar!
 }
 
 /**
- * Confirma agendamento
+ * Confirma presença em agendamento
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} appointmentId - UUID do agendamento
  */
-export async function confirmarAgendamento(appointmentId) {
+export async function confirmarAgendamento(clinicId, appointmentId) {
     try {
         const { data: appointment, error } = await supabase
             .from('appointments')
             .update({ status: 'confirmed' })
             .eq('id', appointmentId)
+            .eq('clinic_id', clinicId)
             .eq('status', 'scheduled')
             .select(`*, doctors (name), services (name)`)
             .single();
-        
+
         if (error || !appointment) {
             return { success: false, message: 'Não foi possível confirmar.' };
         }
-        
+
         return {
             success: true,
             message: `✅ Presença confirmada para ${formatDate(appointment.appointment_date)} às ${formatTime(appointment.start_time)}!`,
             appointment: appointment
         };
-        
+
     } catch (error) {
         console.error('Erro ao confirmar:', error);
         return { success: false, message: 'Erro ao confirmar.', error: error.message };

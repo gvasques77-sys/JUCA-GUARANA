@@ -5,10 +5,10 @@ import { z } from 'zod';
 import pino from 'pino';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
-// ====== NOVAS LINHAS ======
 import path from 'path';
 import { fileURLToPath } from 'url';
 import adminRoutes from './routes/adminRoutes.js';
+import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
 
 // Para usar __dirname com ES Modules
 const __filename = fileURLToPath(import.meta.url);
@@ -215,6 +215,60 @@ app.get('/process', (req, res) => {
     },
   });
 });
+
+// ======================================================
+// UTILITÁRIOS DE CONTEXTO E LOGGING
+// ======================================================
+
+/**
+ * Constrói um resumo estruturado da conversa para injetar no system prompt.
+ * Reduz tokens em históricos longos e torna a memória mais estável.
+ *
+ * @param {Array} previousMessages - Array {role, content} das mensagens anteriores
+ * @returns {string} Resumo formatado ou string vazia se não há histórico
+ */
+function buildContextSummary(previousMessages) {
+  if (!previousMessages || previousMessages.length === 0) return '';
+
+  const userMsgs = previousMessages
+    .filter(m => m.role === 'user')
+    .map(m => m.content);
+
+  const asstMsgs = previousMessages
+    .filter(m => m.role === 'assistant')
+    .map(m => m.content);
+
+  return [
+    '--- CONTEXTO DA CONVERSA ATUAL ---',
+    `Turnos anteriores: ${previousMessages.length}`,
+    `Última mensagem do paciente: "${userMsgs[userMsgs.length - 1] || 'N/A'}"`,
+    `Última resposta da secretaria: "${asstMsgs[asstMsgs.length - 1] || 'N/A'}"`,
+    '--- FIM DO CONTEXTO ---',
+  ].join('\n');
+}
+
+/**
+ * Registra na tabela agent_logs situações onde o agente não encontrou
+ * informação na KB (knowledge gap), para popular a base proativamente.
+ *
+ * @param {string} clinicId
+ * @param {string} correlationId
+ * @param {string} question - pergunta original do paciente
+ * @param {Object} context - contexto adicional (intent, slots, etc.)
+ */
+async function logKnowledgeGap(clinicId, correlationId, question, context) {
+  try {
+    await supabase.from('agent_logs').insert({
+      clinic_id: clinicId,
+      correlation_id: correlationId,
+      log_type: 'knowledge_gap',
+      extra_data: { question, context },
+      latency_ms: 0,
+    });
+  } catch (e) {
+    log.warn({ err: String(e) }, 'knowledge_gap_log_failed');
+  }
+}
 
 // ======================================================
 // ROTA PRINCIPAL: /process
@@ -506,6 +560,7 @@ if (DEBUG) {
     // 8) STEP 1: decide_next_action
     // ======================================================
     if (step < MAX_STEPS) {
+      const contextSummary = buildContextSummary(previousMessages);
       const decision = await openai.chat.completions.create(
         {
           model: OPENAI_MODEL,
@@ -513,17 +568,26 @@ if (DEBUG) {
             {
               role: 'system',
               content: [
-                'Você decide o próximo passo (policy). Sua única saída é chamar decide_next_action.',
+                'Você é a secretária virtual da clínica. Sua única saída é chamar decide_next_action.',
                 'Não invente agenda. Não confirme horário.',
                 `Regra crítica: allow_prices=${clinicRules.allow_prices}.`,
                 'Se o paciente pedir preço e allow_prices=false: decision_type=block_price.',
-                'Se faltar dado essencial: decision_type=ask_missing com pergunta mínima.',
+                'REGRA DE MEMÓRIA: Se o paciente já forneceu nome, especialidade ou data no histórico abaixo, NÃO repita essa pergunta.',
+                'Se já foi informada a intenção (marcar/cancelar/remarcar), NÃO pergunte novamente.',
+                'Se faltar dado essencial que o paciente ainda NÃO forneceu: decision_type=ask_missing com pergunta mínima.',
+                'Se tiver informação suficiente para prosseguir: decision_type=proceed.',
                 'Use KB quando relevante (sem inventar).',
-                'Responda em pt-BR e mensagem curta.',
+                'Mensagem: máximo 2 frases, linguagem informal mas respeitosa.',
+                contextSummary ? `\n${contextSummary}` : '',
                 'KB:',
                 kbContext || 'SEM KB',
-              ].join('\n'),
+              ].filter(Boolean).join('\n'),
             },
+            // Incluir histórico para que o modelo saiba o que já foi respondido
+            ...previousMessages.map(msg => ({
+              role: msg.role === 'user' ? 'user' : 'assistant',
+              content: msg.content,
+            })),
             {
               role: 'user',
               content: JSON.stringify({ extracted }),
@@ -565,8 +629,96 @@ if (DEBUG) {
       };
     }
 
+    // Registrar gap de conhecimento quando a confiança da decisão está baixa
+    if (decided.confidence !== undefined && decided.confidence < 0.7) {
+      await logKnowledgeGap(
+        envelope.clinic_id,
+        envelope.correlation_id,
+        envelope.message_text,
+        { intent: extracted.intent, slots: extracted.slots }
+      );
+    }
+
     // ======================================================
-    // 9) VALIDAÇÃO BACKEND (proteção extra)
+    // 9) STEP 2: AGENTE DE AGENDAMENTO (apenas quando proceed + scheduling)
+    // ======================================================
+    if (
+      decided.decision_type === 'proceed' &&
+      extracted.intent_group === 'scheduling'
+    ) {
+      const contextSummary = buildContextSummary(previousMessages);
+
+      const agentSystemPrompt = [
+        'Você é a secretária virtual da clínica. Responda diretamente ao paciente.',
+        'Use as tools disponíveis para verificar disponibilidade REAL e criar agendamentos.',
+        'Nunca invente horários, médicos ou convênios — consulte sempre as tools.',
+        'Seja breve e educada. Linguagem informal mas respeitosa. Máximo 3 frases.',
+        'Se o paciente já forneceu nome ou data no histórico, não repita a pergunta.',
+        contextSummary ? `\n${contextSummary}` : '',
+        kbContext ? `\nBase de conhecimento:\n${kbContext}` : '',
+      ].filter(Boolean).join('\n');
+
+      const agentMessages = [
+        { role: 'system', content: agentSystemPrompt },
+        ...previousMessages.map(msg => ({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content,
+        })),
+        { role: 'user', content: envelope.message_text },
+      ];
+
+      // Loop do agente com tool_calls (máx 3 iterações)
+      let agentStep = 0;
+      while (agentStep < 3) {
+        const agentResp = await openai.chat.completions.create(
+          {
+            model: OPENAI_MODEL,
+            messages: agentMessages,
+            tools: schedulingToolsDefinitions,
+            temperature: 0.4,
+          },
+          { signal: controller.signal }
+        );
+
+        const choice = agentResp.choices[0];
+
+        if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+          // Resposta textual final — substituir mensagem do decided
+          if (choice.message.content) {
+            decided.message = choice.message.content;
+          }
+          break;
+        }
+
+        // Processar chamadas de tool
+        agentMessages.push(choice.message);
+        for (const toolCall of choice.message.tool_calls) {
+          let toolArgs = {};
+          try { toolArgs = JSON.parse(toolCall.function.arguments); } catch { /* sem args */ }
+
+          const toolResult = await executeSchedulingTool(
+            toolCall.function.name,
+            toolArgs,
+            { clinicId: envelope.clinic_id, userPhone: envelope.from }
+          );
+
+          agentMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(toolResult),
+          });
+
+          if (DEBUG) {
+            log.debug({ tool: toolCall.function.name, result: toolResult }, 'scheduling_tool_executed');
+          }
+        }
+
+        agentStep++;
+      }
+    }
+
+    // ======================================================
+    // 10) VALIDAÇÃO BACKEND (proteção extra)
     // ======================================================
     if (
       extracted.intent_group === 'billing' &&
@@ -588,6 +740,7 @@ if (DEBUG) {
       await supabase.from('agent_logs').insert({
         clinic_id: envelope.clinic_id,
         correlation_id: envelope.correlation_id,
+        log_type: 'intent',
         intent_group: extracted.intent_group,
         intent: extracted.intent,
         confidence: extracted.confidence,

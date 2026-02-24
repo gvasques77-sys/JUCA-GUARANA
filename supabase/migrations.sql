@@ -197,3 +197,29 @@ REVOKE SELECT ON public.agent_logs FROM anon;
 --   ORDER BY tablename;
 --
 -- Esperado: rowsecurity = true para todas as tabelas acima.
+
+-- =======================================================
+-- PARTE 7: Adicionar colunas para knowledge gap logging
+-- Ticket: ALT3 — robust memory + knowledge gap logging
+-- =======================================================
+
+ALTER TABLE public.agent_logs
+  ADD COLUMN IF NOT EXISTS log_type VARCHAR(50) DEFAULT 'intent',
+  ADD COLUMN IF NOT EXISTS extra_data JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_agent_logs_log_type
+  ON public.agent_logs(clinic_id, log_type, created_at DESC);
+
+-- =======================================================
+-- PARTE 8: Dados iniciais de clinic_kb (convênios, políticas)
+-- ATENÇÃO: substitua <CLINIC_ID> pelo UUID real da clínica
+--          antes de executar. Exemplo:
+--          09e5240f-9c26-47ee-a54d-02934a36ebfd
+-- Execute apenas UMA VEZ por clínica.
+-- =======================================================
+
+-- INSERT INTO public.clinic_kb (clinic_id, title, content)
+-- VALUES
+--   ('<CLINIC_ID>', 'Convênios Aceitos', 'Aceitamos os seguintes planos de saúde: Unimed, Bradesco Saúde, SulAmérica, Amil e Porto Seguro. Não aceitamos planos municipais ou estaduais. Consultas particulares também são bem-vindas.'),
+--   ('<CLINIC_ID>', 'Política de Cancelamento', 'Cancelamentos devem ser feitos com pelo menos 24 horas de antecedência. Faltas sem aviso podem acarretar cobrança de taxa.'),
+--   ('<CLINIC_ID>', 'Documentos Necessários', 'Traga documento de identidade, cartão do convênio (se houver) e pedido médico quando necessário.');

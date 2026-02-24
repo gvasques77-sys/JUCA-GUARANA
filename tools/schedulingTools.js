@@ -198,23 +198,30 @@ export const schedulingToolsDefinitions = [
 
 export async function executeSchedulingTool(toolName, args, context = {}) {
     console.log(`[SchedulingTools] Executando: ${toolName}`, args);
-    
+
+    const clinicId = context.clinicId;
+    if (!clinicId) {
+        console.error('[SchedulingTools] clinicId ausente no context — abortando tool');
+        return { success: false, message: 'Configuração interna inválida (clinic_id ausente).' };
+    }
+
     try {
         switch (toolName) {
             case 'listar_medicos':
-                return await schedulingService.listarMedicos(args.especialidade);
-            
+                return await schedulingService.listarMedicos(clinicId, args.especialidade);
+
             case 'listar_servicos':
-                return await schedulingService.listarServicos(args.doctor_id);
-            
+                return await schedulingService.listarServicos(clinicId, args.doctor_id);
+
             case 'verificar_disponibilidade':
-                return await schedulingService.verificarDisponibilidade(args.doctor_id, args.data);
-            
+                return await schedulingService.verificarDisponibilidade(clinicId, args.doctor_id, args.data);
+
             case 'buscar_proximas_datas':
-                return await schedulingService.buscarProximasDatasDisponiveis(args.doctor_id, args.dias || 14);
-            
+                return await schedulingService.buscarProximasDatasDisponiveis(clinicId, args.doctor_id, args.dias || 14);
+
             case 'criar_agendamento':
                 return await schedulingService.criarAgendamento({
+                    clinicId: clinicId,
                     patientPhone: args.patient_phone || context.userPhone,
                     patientName: args.patient_name,
                     doctorId: args.doctor_id,
@@ -223,18 +230,19 @@ export async function executeSchedulingTool(toolName, args, context = {}) {
                     time: args.horario,
                     notes: args.observacoes
                 });
-            
+
             case 'listar_meus_agendamentos':
                 return await schedulingService.listarAgendamentosPaciente(
+                    clinicId,
                     args.patient_phone || context.userPhone
                 );
-            
+
             case 'cancelar_agendamento':
-                return await schedulingService.cancelarAgendamento(args.appointment_id, args.motivo, 'patient');
-            
+                return await schedulingService.cancelarAgendamento(clinicId, args.appointment_id, args.motivo, 'patient');
+
             case 'confirmar_presenca':
-                return await schedulingService.confirmarAgendamento(args.appointment_id);
-            
+                return await schedulingService.confirmarAgendamento(clinicId, args.appointment_id);
+
             default:
                 return { success: false, message: `Tool desconhecida: ${toolName}` };
         }

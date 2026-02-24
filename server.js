@@ -248,6 +248,40 @@ function buildContextSummary(previousMessages) {
 }
 
 /**
+ * Salva um turno da conversa (user + assistant) em conversation_history.
+ * Chamado antes de retornar a resposta final. Nunca lança exceção.
+ */
+async function saveConversationTurn({ clinicId, fromNumber, correlationId, userText, assistantText, intentGroup, intent, slots }) {
+  try {
+    const { error } = await supabase.from('conversation_history').insert([
+      {
+        clinic_id: clinicId,
+        from_number: fromNumber,
+        wa_message_id: correlationId || null,
+        role: 'user',
+        message_text: userText,
+        intent_group: intentGroup || null,
+        intent: intent || null,
+        slots: slots || null,
+      },
+      {
+        clinic_id: clinicId,
+        from_number: fromNumber,
+        wa_message_id: null,
+        role: 'assistant',
+        message_text: assistantText,
+        intent_group: intentGroup || null,
+        intent: intent || null,
+        slots: null,
+      },
+    ]);
+    if (error) log.warn({ err: String(error) }, 'conversation_history_insert_failed');
+  } catch (e) {
+    log.warn({ err: String(e) }, 'conversation_history_insert_exception');
+  }
+}
+
+/**
  * Registra na tabela agent_logs situações onde o agente não encontrou
  * informação na KB (knowledge gap), para popular a base proativamente.
  *
@@ -269,6 +303,40 @@ async function logKnowledgeGap(clinicId, correlationId, question, context) {
     log.warn({ err: String(e) }, 'knowledge_gap_log_failed');
   }
 }
+
+// ======================================================
+// ROTA: GET /history — histórico de conversa por usuário
+// ======================================================
+app.get('/history', checkAgentAuth, async (req, res) => {
+  const { from, clinic_id, limit = '10' } = req.query;
+
+  if (!from || !clinic_id) {
+    return res.status(400).json({ error: 'Parâmetros obrigatórios: from, clinic_id' });
+  }
+
+  const parsedLimit = Math.min(Number(limit) || 10, 30);
+
+  const { data, error } = await supabase
+    .from('conversation_history')
+    .select('role, message_text')
+    .eq('clinic_id', clinic_id)
+    .eq('from_number', from)
+    .order('created_at', { ascending: false })
+    .limit(parsedLimit);
+
+  if (error) {
+    log.warn({ err: String(error) }, 'history_fetch_failed');
+    return res.status(500).json({ error: 'Erro ao buscar histórico' });
+  }
+
+  // Inverter para ordem cronológica (mais antigo primeiro)
+  const messages = (data || []).reverse().map(r => ({
+    role: r.role,
+    content: r.message_text,
+  }));
+
+  return res.json({ messages });
+});
 
 // ======================================================
 // ROTA PRINCIPAL: /process
@@ -486,10 +554,31 @@ extract_intent => {"intent_group":"billing","intent":"procedure_pricing_request"
     let step = 0;
     let extracted = null;
     let decided = null;
-// NOVO: Buscar histórico de conversas
-const previousMessages = envelope.context?.previous_messages || [];
+// Buscar histórico de conversas — usa o que o N8N enviou ou vai ao banco
+let previousMessages = envelope.context?.previous_messages || [];
 
-// NOVO: Construir array de mensagens incluindo histórico
+if (previousMessages.length === 0) {
+  const { data: historyRows } = await supabase
+    .from('conversation_history')
+    .select('role, message_text')
+    .eq('clinic_id', envelope.clinic_id)
+    .eq('from_number', envelope.from)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (historyRows && historyRows.length > 0) {
+    previousMessages = historyRows.reverse().map(r => ({
+      role: r.role,
+      content: r.message_text,
+    }));
+  }
+}
+
+if (DEBUG) {
+  log.debug({ count: previousMessages.length }, 'previous_messages_loaded');
+}
+
+// Construir array de mensagens incluindo histórico
 const messages = [
   {
     role: 'system',
@@ -752,8 +841,19 @@ if (DEBUG) {
     }
 
     // ======================================================
-    // 11) RESPOSTA FINAL
+    // 11) SALVAR HISTÓRICO + RESPOSTA FINAL
     // ======================================================
+    await saveConversationTurn({
+      clinicId: envelope.clinic_id,
+      fromNumber: envelope.from,
+      correlationId: envelope.correlation_id,
+      userText: envelope.message_text,
+      assistantText: decided.message,
+      intentGroup: extracted?.intent_group,
+      intent: extracted?.intent,
+      slots: extracted?.slots,
+    });
+
     clearTimeout(timeoutId);
     return res.json({
       correlation_id: envelope.correlation_id,

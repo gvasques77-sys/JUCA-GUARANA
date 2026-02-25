@@ -305,6 +305,126 @@ async function logKnowledgeGap(clinicId, correlationId, question, context) {
 }
 
 // ======================================================
+// SLOT EXTRACTION & DYNAMIC SYSTEM PROMPT
+// ======================================================
+
+/**
+ * Extrai slots já informados do histórico de mensagens do usuário.
+ * Usado para evitar que o agente repita perguntas já respondidas.
+ */
+const extractCollectedSlots = (previousMessages) => {
+  const slots = { name: null, specialty: null, doctor: null, date: null, time: null };
+
+  for (const msg of previousMessages) {
+    if (msg.role !== 'user') continue;
+    const text = (msg.content || '').toLowerCase();
+
+    // Nome (mensagens curtas sem palavras-chave de agendamento)
+    if (
+      text.match(/^[a-záéíóúâêîôûãõç\s]{2,30}$/i) &&
+      !['dermatologia', 'clínico', 'clinico', 'estética', 'estetica', 'sim', 'não', 'nao', 'ola', 'olá', 'oi', 'geral'].some(k => text.includes(k))
+    ) {
+      slots.name = msg.content;
+    }
+
+    // Especialidade
+    if (text.includes('dermatolog')) slots.specialty = 'Dermatologia';
+    if (text.includes('clínico') || text.includes('clinico') || text.includes('geral')) slots.specialty = 'Clínico Geral';
+    if (text.includes('estética') || text.includes('estetica')) slots.specialty = 'Estética';
+
+    // Médico (por nome)
+    if (text.includes('ana')) slots.doctor = 'Dra. Ana Santos';
+    if (text.includes('carlos')) slots.doctor = 'Dr. Carlos Silva';
+    if (text.includes('julia') || text.includes('júlia')) slots.doctor = 'Dra. Julia Lima';
+
+    // Data
+    if (text.includes('segunda')) slots.date = 'segunda-feira';
+    if (text.includes('terça') || text.includes('terca')) slots.date = 'terça-feira';
+    if (text.includes('quarta')) slots.date = 'quarta-feira';
+    if (text.includes('quinta')) slots.date = 'quinta-feira';
+    if (text.includes('sexta')) slots.date = 'sexta-feira';
+    if (text.includes('sábado') || text.includes('sabado')) slots.date = 'sábado';
+    if (text.includes('amanhã') || text.includes('amanha')) slots.date = 'amanhã';
+    if (text.includes('hoje')) slots.date = 'hoje';
+
+    // Horário
+    const timeMatch = text.match(/(\d{1,2})\s*h/);
+    if (timeMatch) slots.time = `${timeMatch[1]}h`;
+  }
+
+  return slots;
+};
+
+/**
+ * Constrói o system prompt dinâmico com dados reais da clínica.
+ * Injeta médicos, serviços, KB e slots já coletados para evitar
+ * respostas robóticas e perguntas repetidas.
+ */
+const buildSystemPrompt = (clinicSettings, doctors, services, kbContext, previousMessages) => {
+  const doctorsList = doctors.map(d => `• ${d.name} — ${d.specialty}`).join('\n');
+  const specialtiesList = [...new Set(doctors.map(d => d.specialty))].join(', ');
+  const servicesList = services.map(s => `• ${s.name} (${s.duration_minutes}min)`).join('\n');
+
+  const collectedSlots = extractCollectedSlots(previousMessages || []);
+
+  return `
+## IDENTIDADE
+Você é Juca, a secretária virtual da clínica. Seja acolhedora, profissional e humana.
+
+## TOM DE VOZ
+- Fale naturalmente, como uma pessoa real
+- Seja breve e direta
+- Use no máximo 1-2 emojis por mensagem
+- NUNCA use "Se precisar de mais informações, é só avisar!"
+- NUNCA repita perguntas já respondidas
+
+## DADOS REAIS DA CLÍNICA
+
+### Médicos:
+${doctorsList || 'Nenhum cadastrado'}
+
+### Especialidades disponíveis:
+${specialtiesList || 'Nenhuma'}
+
+### Serviços:
+${servicesList || 'Nenhum'}
+
+### Funcionamento:
+${clinicSettings?.policies_text || 'Segunda a sexta, 8h às 18h'}
+
+### Base de Conhecimento:
+${kbContext || 'Sem informações adicionais'}
+
+## REGRAS
+
+### Ao perguntar sobre MÉDICOS ou ESPECIALIDADES:
+Liste TODOS os médicos cadastrados acima com suas especialidades.
+
+### Para AGENDAR, colete nesta ordem:
+1. Nome do paciente
+2. Médico ou especialidade
+3. Data preferida
+4. Horário preferido
+
+### SLOTS JÁ COLETADOS (não pergunte novamente!):
+${collectedSlots.name ? `✅ Nome: ${collectedSlots.name}` : '❌ Nome: pendente'}
+${collectedSlots.specialty || collectedSlots.doctor ? `✅ Médico/Especialidade: ${collectedSlots.specialty || collectedSlots.doctor}` : '❌ Médico/Especialidade: pendente'}
+${collectedSlots.date ? `✅ Data: ${collectedSlots.date}` : '❌ Data: pendente'}
+${collectedSlots.time ? `✅ Horário: ${collectedSlots.time}` : '❌ Horário: pendente'}
+
+### CONFIRMAÇÃO (quando tiver todos os dados):
+"Perfeito, [NOME]! Confirmo sua consulta:
+📅 [DATA] às [HORÁRIO]
+👨‍⚕️ [MÉDICO] — [ESPECIALIDADE]
+Posso confirmar? 😊"
+
+### VALIDAÇÕES:
+- Se pedirem especialidade inexistente, sugira as disponíveis
+- NUNCA invente informações
+`.trim();
+};
+
+// ======================================================
 // ROTA: GET /history — histórico de conversa por usuário
 // ======================================================
 app.get('/history', checkAgentAuth, async (req, res) => {
@@ -420,6 +540,28 @@ app.post('/process', checkAgentAuth, async (req, res) => {
     const kbContext = (kbRows ?? [])
       .map((r) => `• ${r.title}: ${r.content}`)
       .join('\n');
+
+    // ======================================================
+    // 3b) BUSCAR MÉDICOS E SERVIÇOS DA CLÍNICA
+    // ======================================================
+    const [doctorsResult, servicesResult] = await Promise.all([
+      supabase
+        .from('doctors')
+        .select('name, specialty')
+        .eq('clinic_id', envelope.clinic_id)
+        .eq('active', true),
+      supabase
+        .from('services')
+        .select('name, duration_minutes, price')
+        .eq('clinic_id', envelope.clinic_id)
+        .eq('active', true),
+    ]);
+    const doctors = doctorsResult.data || [];
+    const services = servicesResult.data || [];
+
+    if (DEBUG) {
+      log.debug({ doctors: doctors.length, services: services.length }, 'clinic_data_loaded');
+    }
 
     // ======================================================
     // 4) DEFINIR TOOLS (Function Calling)
@@ -649,28 +791,19 @@ if (DEBUG) {
     // 8) STEP 1: decide_next_action
     // ======================================================
     if (step < MAX_STEPS) {
-      const contextSummary = buildContextSummary(previousMessages);
       const decision = await openai.chat.completions.create(
         {
           model: OPENAI_MODEL,
           messages: [
             {
               role: 'system',
-              content: [
-                'Você é a secretária virtual da clínica. Sua única saída é chamar decide_next_action.',
-                'Não invente agenda. Não confirme horário.',
-                `Regra crítica: allow_prices=${clinicRules.allow_prices}.`,
-                'Se o paciente pedir preço e allow_prices=false: decision_type=block_price.',
-                'REGRA DE MEMÓRIA: Se o paciente já forneceu nome, especialidade ou data no histórico abaixo, NÃO repita essa pergunta.',
-                'Se já foi informada a intenção (marcar/cancelar/remarcar), NÃO pergunte novamente.',
-                'Se faltar dado essencial que o paciente ainda NÃO forneceu: decision_type=ask_missing com pergunta mínima.',
-                'Se tiver informação suficiente para prosseguir: decision_type=proceed.',
-                'Use KB quando relevante (sem inventar).',
-                'Mensagem: máximo 2 frases, linguagem informal mas respeitosa.',
-                contextSummary ? `\n${contextSummary}` : '',
-                'KB:',
-                kbContext || 'SEM KB',
-              ].filter(Boolean).join('\n'),
+              content: buildSystemPrompt(clinicRules, doctors, services, kbContext, previousMessages) +
+                `\n\n## RESTRIÇÕES OPERACIONAIS\n` +
+                `allow_prices=${clinicRules.allow_prices}. ` +
+                (clinicRules.allow_prices === false ? 'Se pedir preço: decision_type=block_price.\n' : '\n') +
+                `Se faltar dado essencial: decision_type=ask_missing com pergunta direta (1 frase).\n` +
+                `Se tiver informação suficiente: decision_type=proceed.\n` +
+                `Sua saída DEVE ser via ferramenta decide_next_action.`,
             },
             // Incluir histórico para que o modelo saiba o que já foi respondido
             ...previousMessages.map(msg => ({
@@ -735,17 +868,11 @@ if (DEBUG) {
       decided.decision_type === 'proceed' &&
       extracted.intent_group === 'scheduling'
     ) {
-      const contextSummary = buildContextSummary(previousMessages);
-
-      const agentSystemPrompt = [
-        'Você é a secretária virtual da clínica. Responda diretamente ao paciente.',
-        'Use as tools disponíveis para verificar disponibilidade REAL e criar agendamentos.',
-        'Nunca invente horários, médicos ou convênios — consulte sempre as tools.',
-        'Seja breve e educada. Linguagem informal mas respeitosa. Máximo 3 frases.',
-        'Se o paciente já forneceu nome ou data no histórico, não repita a pergunta.',
-        contextSummary ? `\n${contextSummary}` : '',
-        kbContext ? `\nBase de conhecimento:\n${kbContext}` : '',
-      ].filter(Boolean).join('\n');
+      const agentSystemPrompt = buildSystemPrompt(clinicRules, doctors, services, kbContext, previousMessages) +
+        '\n\n## INSTRUÇÕES DE AGENDAMENTO\n' +
+        'Use as ferramentas disponíveis para verificar disponibilidade REAL e criar agendamentos.\n' +
+        'Nunca invente horários ou convênios — consulte sempre as tools.\n' +
+        'Responda diretamente ao paciente em no máximo 3 frases.';
 
       const agentMessages = [
         { role: 'system', content: agentSystemPrompt },

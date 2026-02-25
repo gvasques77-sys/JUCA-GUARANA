@@ -223,3 +223,54 @@ CREATE INDEX IF NOT EXISTS idx_agent_logs_log_type
 --   ('<CLINIC_ID>', 'Convênios Aceitos', 'Aceitamos os seguintes planos de saúde: Unimed, Bradesco Saúde, SulAmérica, Amil e Porto Seguro. Não aceitamos planos municipais ou estaduais. Consultas particulares também são bem-vindas.'),
 --   ('<CLINIC_ID>', 'Política de Cancelamento', 'Cancelamentos devem ser feitos com pelo menos 24 horas de antecedência. Faltas sem aviso podem acarretar cobrança de taxa.'),
 --   ('<CLINIC_ID>', 'Documentos Necessários', 'Traga documento de identidade, cartão do convênio (se houver) e pedido médico quando necessário.');
+
+-- =======================================================
+-- PARTE 9: Tabela conversation_state (estado persistente)
+-- Ticket: Estado Persistente — Single Source of Truth
+-- Execute este bloco no Supabase SQL Editor
+-- =======================================================
+
+CREATE TABLE IF NOT EXISTS public.conversation_state (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id   UUID NOT NULL REFERENCES public.clinic_settings(clinic_id) ON DELETE CASCADE,
+  from_number VARCHAR(50) NOT NULL,
+  state_json  JSONB NOT NULL DEFAULT '{}',
+  turn_count  INTEGER DEFAULT 0,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '24 hours'),
+  UNIQUE(clinic_id, from_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_state_lookup
+  ON public.conversation_state(clinic_id, from_number);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_state_expires
+  ON public.conversation_state(expires_at);
+
+-- RLS
+ALTER TABLE public.conversation_state ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "conversation_state_isolation" ON public.conversation_state;
+CREATE POLICY "conversation_state_isolation"
+  ON public.conversation_state
+  FOR ALL
+  USING (
+    auth.role() = 'service_role'
+    OR clinic_id = (current_setting('app.clinic_id', true))::uuid
+  );
+
+-- Trigger para atualizar updated_at automaticamente
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  NEW.turn_count = OLD.turn_count + 1;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_conversation_state_updated_at ON public.conversation_state;
+CREATE TRIGGER trg_conversation_state_updated_at
+  BEFORE UPDATE ON public.conversation_state
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();

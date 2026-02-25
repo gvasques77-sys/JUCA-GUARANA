@@ -217,35 +217,8 @@ app.get('/process', (req, res) => {
 });
 
 // ======================================================
-// UTILITÁRIOS DE CONTEXTO E LOGGING
+// UTILITÁRIOS DE LOGGING
 // ======================================================
-
-/**
- * Constrói um resumo estruturado da conversa para injetar no system prompt.
- * Reduz tokens em históricos longos e torna a memória mais estável.
- *
- * @param {Array} previousMessages - Array {role, content} das mensagens anteriores
- * @returns {string} Resumo formatado ou string vazia se não há histórico
- */
-function buildContextSummary(previousMessages) {
-  if (!previousMessages || previousMessages.length === 0) return '';
-
-  const userMsgs = previousMessages
-    .filter(m => m.role === 'user')
-    .map(m => m.content);
-
-  const asstMsgs = previousMessages
-    .filter(m => m.role === 'assistant')
-    .map(m => m.content);
-
-  return [
-    '--- CONTEXTO DA CONVERSA ATUAL ---',
-    `Turnos anteriores: ${previousMessages.length}`,
-    `Última mensagem do paciente: "${userMsgs[userMsgs.length - 1] || 'N/A'}"`,
-    `Última resposta da secretaria: "${asstMsgs[asstMsgs.length - 1] || 'N/A'}"`,
-    '--- FIM DO CONTEXTO ---',
-  ].join('\n');
-}
 
 /**
  * Salva um turno da conversa (user + assistant) em conversation_history.
@@ -305,122 +278,289 @@ async function logKnowledgeGap(clinicId, correlationId, question, context) {
 }
 
 // ======================================================
-// SLOT EXTRACTION & DYNAMIC SYSTEM PROMPT
+// GERENCIAMENTO DE ESTADO PERSISTENTE
 // ======================================================
 
 /**
- * Extrai slots já informados do histórico de mensagens do usuário.
- * Usado para evitar que o agente repita perguntas já respondidas.
+ * Carrega ou cria estado da conversa no banco.
  */
-const extractCollectedSlots = (previousMessages) => {
-  const slots = { name: null, specialty: null, doctor: null, date: null, time: null };
+async function loadConversationState(supabase, clinicId, fromNumber) {
+  const { data, error } = await supabase
+    .from('conversation_state')
+    .select('*')
+    .eq('clinic_id', clinicId)
+    .eq('from_number', fromNumber)
+    .single();
 
-  for (const msg of previousMessages) {
-    if (msg.role !== 'user') continue;
-    const text = (msg.content || '').toLowerCase();
-
-    // Nome (mensagens curtas sem palavras-chave de agendamento)
-    if (
-      text.match(/^[a-záéíóúâêîôûãõç\s]{2,30}$/i) &&
-      !['dermatologia', 'clínico', 'clinico', 'estética', 'estetica', 'sim', 'não', 'nao', 'ola', 'olá', 'oi', 'geral'].some(k => text.includes(k))
-    ) {
-      slots.name = msg.content;
-    }
-
-    // Especialidade
-    if (text.includes('dermatolog')) slots.specialty = 'Dermatologia';
-    if (text.includes('clínico') || text.includes('clinico') || text.includes('geral')) slots.specialty = 'Clínico Geral';
-    if (text.includes('estética') || text.includes('estetica')) slots.specialty = 'Estética';
-
-    // Médico (por nome)
-    if (text.includes('ana')) slots.doctor = 'Dra. Ana Santos';
-    if (text.includes('carlos')) slots.doctor = 'Dr. Carlos Silva';
-    if (text.includes('julia') || text.includes('júlia')) slots.doctor = 'Dra. Julia Lima';
-
-    // Data
-    if (text.includes('segunda')) slots.date = 'segunda-feira';
-    if (text.includes('terça') || text.includes('terca')) slots.date = 'terça-feira';
-    if (text.includes('quarta')) slots.date = 'quarta-feira';
-    if (text.includes('quinta')) slots.date = 'quinta-feira';
-    if (text.includes('sexta')) slots.date = 'sexta-feira';
-    if (text.includes('sábado') || text.includes('sabado')) slots.date = 'sábado';
-    if (text.includes('amanhã') || text.includes('amanha')) slots.date = 'amanhã';
-    if (text.includes('hoje')) slots.date = 'hoje';
-
-    // Horário
-    const timeMatch = text.match(/(\d{1,2})\s*h/);
-    if (timeMatch) slots.time = `${timeMatch[1]}h`;
+  if (error && error.code !== 'PGRST116') {
+    console.error('Erro ao carregar estado:', error);
   }
 
-  return slots;
-};
+  if (data) {
+    if (new Date(data.expires_at) < new Date()) {
+      return await resetConversationState(supabase, clinicId, fromNumber);
+    }
+    // Nova mensagem após agendamento confirmado → nova conversa
+    if (data.state_json?.appointment_confirmed) {
+      console.log('🔄 Agendamento anterior confirmado — resetando estado para nova conversa');
+      return await resetConversationState(supabase, clinicId, fromNumber);
+    }
+    return data.state_json;
+  }
+
+  return await resetConversationState(supabase, clinicId, fromNumber);
+}
 
 /**
- * Constrói o system prompt dinâmico com dados reais da clínica.
- * Injeta médicos, serviços, KB e slots já coletados para evitar
- * respostas robóticas e perguntas repetidas.
+ * Cria/reseta estado da conversa para valores iniciais.
  */
-const buildSystemPrompt = (clinicSettings, doctors, services, kbContext, previousMessages) => {
+async function resetConversationState(supabase, clinicId, fromNumber) {
+  const initialState = {
+    patient_name: null,
+    patient_phone: fromNumber,
+    intent: null,
+    doctor_id: null,
+    doctor_name: null,
+    specialty: null,
+    service_id: null,
+    service_name: null,
+    preferred_date: null,
+    preferred_date_iso: null,
+    preferred_time: null,
+    pending_fields: [],
+    last_question_asked: null,
+    conversation_stage: 'greeting',
+    appointment_confirmed: false,
+  };
+
+  const { error } = await supabase
+    .from('conversation_state')
+    .upsert({
+      clinic_id: clinicId,
+      from_number: fromNumber,
+      state_json: initialState,
+      turn_count: 0,
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }, { onConflict: 'clinic_id,from_number' });
+
+  if (error) console.error('Erro ao resetar estado:', error);
+  return initialState;
+}
+
+/**
+ * Atualiza estado da conversa mesclando com o estado atual do banco.
+ */
+async function updateConversationState(supabase, clinicId, fromNumber, updates) {
+  const { data: current } = await supabase
+    .from('conversation_state')
+    .select('state_json')
+    .eq('clinic_id', clinicId)
+    .eq('from_number', fromNumber)
+    .single();
+
+  const newState = { ...current?.state_json, ...updates };
+
+  const { error } = await supabase
+    .from('conversation_state')
+    .update({
+      state_json: newState,
+      updated_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    })
+    .eq('clinic_id', clinicId)
+    .eq('from_number', fromNumber);
+
+  if (error) console.error('Erro ao atualizar estado:', error);
+  return newState;
+}
+
+/**
+ * Merge slots extraídos pelo LLM no estado persistente.
+ * Valida especialidade e médico contra dados reais da clínica.
+ * Suporta os dois naming conventions do extract_intent.
+ */
+function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
+  const updates = { ...currentState };
+
+  // Nome do paciente
+  if (extractedSlots.patient_name) {
+    updates.patient_name = extractedSlots.patient_name;
+  }
+
+  // Especialidade (extract_intent usa 'specialty_or_reason')
+  const specialtyInput = extractedSlots.specialty || extractedSlots.specialty_or_reason;
+  if (specialtyInput) {
+    const normalizedSpec = specialtyInput.toLowerCase();
+    const matchingDoctor = doctors.find(d =>
+      d.specialty.toLowerCase().includes(normalizedSpec) ||
+      normalizedSpec.includes(d.specialty.toLowerCase())
+    );
+    if (matchingDoctor) {
+      updates.specialty = matchingDoctor.specialty;
+      updates.doctor_name = matchingDoctor.name;
+      updates.doctor_id = matchingDoctor.id;
+    }
+  }
+
+  // Médico específico (extract_intent usa 'doctor_preference')
+  const doctorInput = extractedSlots.doctor_name || extractedSlots.doctor_preference;
+  if (doctorInput) {
+    const normalizedDoc = doctorInput.toLowerCase();
+    const matchingDoctor = doctors.find(d =>
+      d.name.toLowerCase().includes(normalizedDoc) ||
+      normalizedDoc.includes((d.name.toLowerCase().split(' ')[1]) || '')
+    );
+    if (matchingDoctor) {
+      updates.doctor_name = matchingDoctor.name;
+      updates.doctor_id = matchingDoctor.id;
+      updates.specialty = matchingDoctor.specialty;
+    }
+  }
+
+  // Data (extract_intent usa 'preferred_date_text')
+  const dateInput = extractedSlots.preferred_date_text || extractedSlots.preferred_date;
+  if (dateInput) {
+    updates.preferred_date = dateInput;
+    if (extractedSlots.preferred_date_iso) {
+      updates.preferred_date_iso = extractedSlots.preferred_date_iso;
+    }
+  }
+
+  // Horário (extract_intent usa 'preferred_time_text')
+  const timeInput = extractedSlots.preferred_time || extractedSlots.preferred_time_text;
+  if (timeInput) {
+    updates.preferred_time = timeInput;
+  }
+
+  updates.pending_fields = calculatePendingFields(updates);
+  updates.conversation_stage = determineConversationStage(updates);
+
+  return updates;
+}
+
+/**
+ * Calcula quais campos ainda faltam para agendar.
+ */
+function calculatePendingFields(state) {
+  const pending = [];
+  if (!state.patient_name) pending.push('patient_name');
+  if (!state.specialty && !state.doctor_name) pending.push('specialty_or_doctor');
+  if (!state.preferred_date) pending.push('preferred_date');
+  if (!state.preferred_time) pending.push('preferred_time');
+  return pending;
+}
+
+/**
+ * Determina o estágio atual da conversa com base no estado.
+ */
+function determineConversationStage(state) {
+  if (state.appointment_confirmed) return 'confirmed';
+  if (state.pending_fields.length === 0) return 'ready_to_confirm';
+  if (state.pending_fields.length === 1) return 'almost_complete';
+  if (state.patient_name || state.specialty) return 'collecting_info';
+  return 'greeting';
+}
+
+/**
+ * Verifica se a nova resposta é muito similar à última pergunta feita.
+ * Usa similaridade de Jaccard sobre palavras com mais de 3 letras.
+ */
+function isRepetition(newMessage, lastQuestion) {
+  if (!lastQuestion) return false;
+
+  const normalize = (text) => text.toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 3)
+    .sort()
+    .join(' ');
+
+  const setA = new Set(normalize(newMessage).split(' '));
+  const setB = new Set(normalize(lastQuestion).split(' '));
+  const intersection = new Set([...setA].filter(x => setB.has(x)));
+  const union = new Set([...setA, ...setB]);
+  if (union.size === 0) return false;
+  return (intersection.size / union.size) > 0.7;
+}
+
+// ======================================================
+// DYNAMIC SYSTEM PROMPT (com estado como fonte da verdade)
+// ======================================================
+
+/**
+ * Constrói o system prompt usando o estado persistente como fonte da verdade.
+ * Substitui a abordagem anterior baseada em regex sobre previousMessages.
+ */
+const buildSystemPrompt = (clinicSettings, doctors, services, kbContext, conversationState) => {
   const doctorsList = doctors.map(d => `• ${d.name} — ${d.specialty}`).join('\n');
   const specialtiesList = [...new Set(doctors.map(d => d.specialty))].join(', ');
-  const servicesList = services.map(s => `• ${s.name} (${s.duration_minutes}min)`).join('\n');
 
-  const collectedSlots = extractCollectedSlots(previousMessages || []);
+  const cs = conversationState || {};
+  const stateDisplay = `
+ESTADO ATUAL DA CONVERSA (FONTE DA VERDADE — NÃO PERGUNTE O QUE JÁ TEM):
+${cs.patient_name ? `✅ Nome: ${cs.patient_name}` : '❌ Nome: PENDENTE'}
+${cs.doctor_name ? `✅ Médico: ${cs.doctor_name} (${cs.specialty})` : cs.specialty ? `✅ Especialidade: ${cs.specialty}` : '❌ Médico/Especialidade: PENDENTE'}
+${cs.preferred_date ? `✅ Data: ${cs.preferred_date}` : '❌ Data: PENDENTE'}
+${cs.preferred_time ? `✅ Horário: ${cs.preferred_time}` : '❌ Horário: PENDENTE'}
+
+ESTÁGIO: ${cs.conversation_stage || 'greeting'}
+PRÓXIMO CAMPO A COLETAR: ${(cs.pending_fields || [])[0] || 'NENHUM — PRONTO PARA CONFIRMAR'}
+${cs.last_question_asked ? `ÚLTIMA PERGUNTA FEITA (NÃO REPITA): "${cs.last_question_asked}"` : ''}
+`.trim();
 
   return `
 ## IDENTIDADE
-Você é Juca, a secretária virtual da clínica. Seja acolhedora, profissional e humana.
+Você é Juca, secretária virtual da clínica. Seja acolhedora, profissional e humana.
 
 ## TOM DE VOZ
-- Fale naturalmente, como uma pessoa real
-- Seja breve e direta
-- Use no máximo 1-2 emojis por mensagem
-- NUNCA use "Se precisar de mais informações, é só avisar!"
-- NUNCA repita perguntas já respondidas
+- Natural, como pessoa real
+- Breve e direta
+- Máximo 1-2 emojis (😊 📅 ✅)
+- PROIBIDO: "Se precisar de mais informações, é só avisar!"
+- PROIBIDO: Repetir perguntas já respondidas
+- PROIBIDO: Fazer múltiplas perguntas de uma vez
 
-## DADOS REAIS DA CLÍNICA
-
-### Médicos:
+## MÉDICOS DISPONÍVEIS
 ${doctorsList || 'Nenhum cadastrado'}
 
-### Especialidades disponíveis:
+## ESPECIALIDADES
 ${specialtiesList || 'Nenhuma'}
 
-### Serviços:
-${servicesList || 'Nenhum'}
-
-### Funcionamento:
+## HORÁRIO
 ${clinicSettings?.policies_text || 'Segunda a sexta, 8h às 18h'}
 
-### Base de Conhecimento:
+## BASE DE CONHECIMENTO
 ${kbContext || 'Sem informações adicionais'}
 
-## REGRAS
+---
 
-### Ao perguntar sobre MÉDICOS ou ESPECIALIDADES:
-Liste TODOS os médicos cadastrados acima com suas especialidades.
+${stateDisplay}
 
-### Para AGENDAR, colete nesta ordem:
-1. Nome do paciente
-2. Médico ou especialidade
-3. Data preferida
-4. Horário preferido
+---
 
-### SLOTS JÁ COLETADOS (não pergunte novamente!):
-${collectedSlots.name ? `✅ Nome: ${collectedSlots.name}` : '❌ Nome: pendente'}
-${collectedSlots.specialty || collectedSlots.doctor ? `✅ Médico/Especialidade: ${collectedSlots.specialty || collectedSlots.doctor}` : '❌ Médico/Especialidade: pendente'}
-${collectedSlots.date ? `✅ Data: ${collectedSlots.date}` : '❌ Data: pendente'}
-${collectedSlots.time ? `✅ Horário: ${collectedSlots.time}` : '❌ Horário: pendente'}
+## REGRAS DE COMPORTAMENTO
 
-### CONFIRMAÇÃO (quando tiver todos os dados):
-"Perfeito, [NOME]! Confirmo sua consulta:
-📅 [DATA] às [HORÁRIO]
-👨‍⚕️ [MÉDICO] — [ESPECIALIDADE]
+### REGRA #1: NUNCA PERGUNTE O QUE JÁ TEM ✅
+Se o estado mostra ✅, o dado já foi coletado. USE-O, não pergunte novamente.
+
+### REGRA #2: UMA PERGUNTA POR VEZ
+Pergunte apenas UM campo pendente (❌) por mensagem.
+Prioridade: 1) Especialidade/Médico → 2) Data → 3) Horário → 4) Nome
+
+### REGRA #3: QUANDO PERGUNTAREM SOBRE MÉDICOS/ESPECIALIDADES
+Liste TODOS os médicos acima com suas especialidades. Ex: "Temos: ${specialtiesList}. Com qual você quer agendar?"
+
+### REGRA #4: VALIDAÇÃO
+Se pedirem especialidade que NÃO existe na lista, diga educadamente e sugira as disponíveis.
+
+### REGRA #5: CONFIRMAÇÃO (quando tudo preenchido)
+"${cs.patient_name || '[NOME]'}, confirmo sua consulta:
+📅 ${cs.preferred_date || '[DATA]'} às ${cs.preferred_time || '[HORÁRIO]'}
+👩‍⚕️ ${cs.doctor_name || '[MÉDICO]'}
 Posso confirmar? 😊"
 
-### VALIDAÇÕES:
-- Se pedirem especialidade inexistente, sugira as disponíveis
-- NUNCA invente informações
+### REGRA #6: SAUDAÇÃO INICIAL
+Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos, informações ou tirar dúvidas. Como posso te ajudar hoje?"
 `.trim();
 };
 
@@ -542,12 +682,12 @@ app.post('/process', checkAgentAuth, async (req, res) => {
       .join('\n');
 
     // ======================================================
-    // 3b) BUSCAR MÉDICOS E SERVIÇOS DA CLÍNICA
+    // 3b) BUSCAR MÉDICOS, SERVIÇOS E ESTADO DA CONVERSA
     // ======================================================
-    const [doctorsResult, servicesResult] = await Promise.all([
+    const [doctorsResult, servicesResult, conversationState] = await Promise.all([
       supabase
         .from('doctors')
-        .select('name, specialty')
+        .select('id, name, specialty')
         .eq('clinic_id', envelope.clinic_id)
         .eq('active', true),
       supabase
@@ -555,9 +695,15 @@ app.post('/process', checkAgentAuth, async (req, res) => {
         .select('name, duration_minutes, price')
         .eq('clinic_id', envelope.clinic_id)
         .eq('active', true),
+      loadConversationState(supabase, envelope.clinic_id, envelope.from),
     ]);
     const doctors = doctorsResult.data || [];
     const services = servicesResult.data || [];
+
+    if (DEBUG) {
+      log.debug({ state: conversationState }, 'conversation_state_loaded');
+    }
+    console.log('📊 Estado carregado:', JSON.stringify(conversationState, null, 2));
 
     if (DEBUG) {
       log.debug({ doctors: doctors.length, services: services.length }, 'clinic_data_loaded');
@@ -773,6 +919,22 @@ if (DEBUG) {
   log.debug({ extracted }, 'extraction_result');
 }
 
+// ========== MERGEAR SLOTS NO ESTADO PERSISTENTE ==========
+const updatedState = mergeExtractedSlots(
+  conversationState,
+  extracted?.slots || {},
+  doctors,
+  services
+);
+
+// Salvar estado atualizado (sem sobrescrever last_question_asked ainda)
+await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+  ...updatedState,
+  intent: extracted?.intent || conversationState.intent,
+});
+
+console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
+
     // ======================================================
     // 7) CONFIDENCE GUARD
     // ======================================================
@@ -797,7 +959,7 @@ if (DEBUG) {
           messages: [
             {
               role: 'system',
-              content: buildSystemPrompt(clinicRules, doctors, services, kbContext, previousMessages) +
+              content: buildSystemPrompt(clinicRules, doctors, services, kbContext, updatedState) +
                 `\n\n## RESTRIÇÕES OPERACIONAIS\n` +
                 `allow_prices=${clinicRules.allow_prices}. ` +
                 (clinicRules.allow_prices === false ? 'Se pedir preço: decision_type=block_price.\n' : '\n') +
@@ -868,7 +1030,7 @@ if (DEBUG) {
       decided.decision_type === 'proceed' &&
       extracted.intent_group === 'scheduling'
     ) {
-      const agentSystemPrompt = buildSystemPrompt(clinicRules, doctors, services, kbContext, previousMessages) +
+      const agentSystemPrompt = buildSystemPrompt(clinicRules, doctors, services, kbContext, updatedState) +
         '\n\n## INSTRUÇÕES DE AGENDAMENTO\n' +
         'Use as ferramentas disponíveis para verificar disponibilidade REAL e criar agendamentos.\n' +
         'Nunca invente horários ou convênios — consulte sempre as tools.\n' +
@@ -947,6 +1109,23 @@ if (DEBUG) {
         actions: [{ type: 'log' }],
         confidence: 1,
       };
+    }
+
+    // ======================================================
+    // 10b) ANTI-REPETIÇÃO: salvar última pergunta no estado
+    // ======================================================
+    const finalMessage = decided.message;
+    const questionMatch = finalMessage.match(/[^.!]*\?/);
+    const lastQuestion = questionMatch ? questionMatch[0].trim() : null;
+
+    if (isRepetition(finalMessage, updatedState.last_question_asked)) {
+      log.warn({ msg: finalMessage, prev: updatedState.last_question_asked }, '⚠️ repetição detectada');
+    }
+
+    if (lastQuestion) {
+      await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+        last_question_asked: lastQuestion,
+      });
     }
 
     // ======================================================

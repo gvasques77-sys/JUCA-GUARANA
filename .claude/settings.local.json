@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm info:*)"
+      "Bash(npm info:*)",
+      "Bash(claude mcp list)",
+      "mcp__claude_ai_Supabase__list_projects",
+      "mcp__claude_ai_Supabase__list_tables",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "Bash(curl -s -H \"X-N8N-API-KEY: X42R0_AFZgGcq1Qsc8R5w-o~D~Qb4CIU\" \"https://primary-production-4d03.up.railway.app/api/v1/workflows/TV1clCob663lQ0WD\")",
+      "Bash(node -e \"let d=''''; process.stdin.on\\(''data'',c=>d+=c\\); process.stdin.on\\(''end'',\\(\\)=>{ const w=JSON.parse\\(d\\); w.nodes.forEach\\(n=>{ console.log\\(''=== NODE:'',n.name,''|'',n.type\\); const p=n.parameters||{}; if\\(p.jsCode\\) console.log\\(''JS CODE:\\\\n''+p.jsCode\\); else console.log\\(JSON.stringify\\(p,null,2\\)\\); console.log\\(''''\\); }\\); }\\)\")",
+      "Bash(curl -s -H \"X-N8N-API-KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhNWVkOGQ0MS1kNTc1LTQwNmYtOThlNy02NjBhMTkwYzJhZTIiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiYzQ3NDVmODgtNmMyMy00ZDg3LTk4Y2YtMzEwOTBjYzUxMGI5IiwiaWF0IjoxNzcxOTczNjM2fQ.HoURPkPOy11lkmfYI1mwGF-aEPAjUbE4qR2IKphiT1c\" \"https://primary-production-4d03.up.railway.app/api/v1/workflows/TV1clCob663lQ0WD\")",
+      "Bash(node -e \":*)",
+      "Bash(git add server.js)",
+      "Bash(git commit:*)",
+      "Bash(git push origin main)",
+      "Bash(git add server.js supabase/migrations.sql)",
+      "Bash(node --check server.js)"
     ]
   }
 }

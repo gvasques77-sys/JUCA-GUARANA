@@ -331,6 +331,10 @@ async function resetConversationState(supabase, clinicId, fromNumber) {
     last_question_asked: null,
     conversation_stage: 'greeting',
     appointment_confirmed: false,
+    // Memória operacional (anti-loop de disponibilidade)
+    last_suggested_dates: [],
+    last_suggested_slots: [],
+    stuck_counter: {},
   };
 
   const { error } = await supabase
@@ -433,6 +437,21 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   }
 
   updates.pending_fields = calculatePendingFields(updates);
+
+  // Atualizar stuck_counter: incrementa campos que continuam pendentes
+  const currentStuck = currentState.stuck_counter || {};
+  const newStuck = { ...currentStuck };
+  for (const field of updates.pending_fields) {
+    newStuck[field] = (newStuck[field] || 0) + 1;
+  }
+  // Zerar contador de campos que foram preenchidos neste turno
+  for (const field of Object.keys(newStuck)) {
+    if (!updates.pending_fields.includes(field)) {
+      newStuck[field] = 0;
+    }
+  }
+  updates.stuck_counter = newStuck;
+
   updates.conversation_stage = determineConversationStage(updates);
 
   return updates;
@@ -483,6 +502,22 @@ function isRepetition(newMessage, lastQuestion) {
   return (intersection.size / union.size) > 0.7;
 }
 
+/**
+ * Detecta se a mensagem do usuário é uma pergunta de disponibilidade.
+ * Quando verdadeiro, o interceptor chama buscar_proximas_datas em vez de
+ * perguntar "qual data você prefere?".
+ */
+function detectAvailabilityQuestion(text) {
+  const normalized = text.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove acentos
+  const patterns = [
+    /disponiv/, /disponibilidade/, /quais dias/, /que dia/, /qual dia/,
+    /tem agenda/, /tem horario/, /quais horarios/, /que horario/,
+    /proximo/, /proxima/, /quando tem/, /quando voce/, /quando atende/,
+  ];
+  return patterns.some(p => p.test(normalized));
+}
+
 // ======================================================
 // DYNAMIC SYSTEM PROMPT (com estado como fonte da verdade)
 // ======================================================
@@ -506,6 +541,12 @@ ${cs.preferred_time ? `✅ Horário: ${cs.preferred_time}` : '❌ Horário: PEND
 ESTÁGIO: ${cs.conversation_stage || 'greeting'}
 PRÓXIMO CAMPO A COLETAR: ${(cs.pending_fields || [])[0] || 'NENHUM — PRONTO PARA CONFIRMAR'}
 ${cs.last_question_asked ? `ÚLTIMA PERGUNTA FEITA (NÃO REPITA): "${cs.last_question_asked}"` : ''}
+${(cs.last_suggested_dates || []).length > 0
+  ? `DATAS JÁ APRESENTADAS AO PACIENTE: ${cs.last_suggested_dates.map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join(' | ')}`
+  : ''}
+${(cs.last_suggested_slots || []).length > 0
+  ? `HORÁRIOS JÁ APRESENTADOS AO PACIENTE: ${cs.last_suggested_slots.map((s, i) => `${i + 1}) ${s}`).join(' | ')}`
+  : ''}
 `.trim();
 
   return `
@@ -541,26 +582,55 @@ ${stateDisplay}
 ## REGRAS DE COMPORTAMENTO
 
 ### REGRA #1: NUNCA PERGUNTE O QUE JÁ TEM ✅
-Se o estado mostra ✅, o dado já foi coletado. USE-O, não pergunte novamente.
+Se o estado mostra ✅, o dado já foi coletado. USE-O. Não pergunte novamente.
 
 ### REGRA #2: UMA PERGUNTA POR VEZ
 Pergunte apenas UM campo pendente (❌) por mensagem.
-Prioridade: 1) Especialidade/Médico → 2) Data → 3) Horário → 4) Nome
+Prioridade: 1) Especialidade/Médico → 2) Nome → 3) Data → 4) Horário
 
-### REGRA #3: QUANDO PERGUNTAREM SOBRE MÉDICOS/ESPECIALIDADES
-Liste TODOS os médicos acima com suas especialidades. Ex: "Temos: ${specialtiesList}. Com qual você quer agendar?"
+### REGRA #3: DISPONIBILIDADE — PROIBIDO INVENTAR ⚠️
+NUNCA sugira datas ou horários que não tenham vindo de uma ferramenta (tool).
+Se o paciente perguntar "que dia tem?", "quais horários?", "tem agenda?" ou similares:
+- NÃO pergunte "qual data você prefere?" sem antes consultar a agenda.
+- CHAME a ferramenta buscar_proximas_datas e mostre as datas reais retornadas.
+Se o paciente escolher uma data específica:
+- CHAME verificar_disponibilidade e liste apenas os horários retornados.
+Se não houver horários na data pedida:
+- Informe e ofereça as próximas datas (chame buscar_proximas_datas).
 
-### REGRA #4: VALIDAÇÃO
+### REGRA #4: MEMÓRIA DE OPÇÕES APRESENTADAS
+Se o paciente responder "a primeira", "a segunda", "de manhã", "o primeiro horário":
+- Use DATAS JÁ APRESENTADAS ou HORÁRIOS JÁ APRESENTADOS (listados no estado acima) para resolver.
+- Nunca peça para repetir uma escolha que já foi dada sobre opções que você apresentou.
+
+### REGRA #5: ANTI-LOOP — STUCK COUNTER
+${(cs.stuck_counter?.preferred_date || 0) >= 2
+  ? '⚠️ ATENÇÃO: A data foi perguntada 2 ou mais vezes sem resposta. NÃO pergunte de novo. Chame buscar_proximas_datas e ofereça as opções diretamente.'
+  : ''}
+${(cs.stuck_counter?.preferred_time || 0) >= 2
+  ? '⚠️ ATENÇÃO: O horário foi perguntado 2 ou mais vezes. NÃO pergunte de novo. Use verificar_disponibilidade se tiver a data, ou liste os períodos disponíveis (manhã/tarde).'
+  : ''}
+
+### REGRA #6: INTERRUPÇÕES NO MEIO DO AGENDAMENTO
+Se o paciente fizer uma pergunta de informação (convênio, endereço, valores, horário da clínica):
+1. Responda objetivamente em 1-2 frases.
+2. Retome com UMA pergunta sobre o campo pendente mais prioritário.
+3. NÃO reinicie o fluxo. NÃO repita dados já coletados.
+
+### REGRA #7: QUANDO PERGUNTAREM SOBRE MÉDICOS/ESPECIALIDADES
+Liste TODOS os médicos acima com suas especialidades. Depois pergunte com qual quer agendar.
+
+### REGRA #8: VALIDAÇÃO
 Se pedirem especialidade que NÃO existe na lista, diga educadamente e sugira as disponíveis.
 
-### REGRA #5: CONFIRMAÇÃO (quando tudo preenchido)
+### REGRA #9: CONFIRMAÇÃO (quando todos os campos estiverem preenchidos)
 "${cs.patient_name || '[NOME]'}, confirmo sua consulta:
 📅 ${cs.preferred_date || '[DATA]'} às ${cs.preferred_time || '[HORÁRIO]'}
 👩‍⚕️ ${cs.doctor_name || '[MÉDICO]'}
 Posso confirmar? 😊"
 
-### REGRA #6: SAUDAÇÃO INICIAL
-Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos, informações ou tirar dúvidas. Como posso te ajudar hoje?"
+### REGRA #10: SAUDAÇÃO INICIAL
+Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos e informações. Como posso te ajudar hoje?"
 `.trim();
 };
 
@@ -842,6 +912,7 @@ extract_intent => {"intent_group":"billing","intent":"procedure_pricing_request"
     let step = 0;
     let extracted = null;
     let decided = null;
+    let skipSchedulingAgent = false;
 // Buscar histórico de conversas — usa o que o N8N enviou ou vai ao banco
 let previousMessages = envelope.context?.previous_messages || [];
 
@@ -950,6 +1021,50 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
     }
 
     // ======================================================
+    // 7b) INTERCEPTOR DE DISPONIBILIDADE
+    // Quando usuário pergunta disponibilidade e temos médico no estado,
+    // forçar chamada da tool em vez de perguntar a data.
+    // ======================================================
+    const isAvailabilityQuery = detectAvailabilityQuestion(envelope.message_text);
+    const hasDoctorInState = !!(updatedState.doctor_id);
+
+    if (
+      isAvailabilityQuery &&
+      hasDoctorInState &&
+      extracted?.intent_group === 'scheduling'
+    ) {
+      log.info({ doctorId: updatedState.doctor_id }, '🔍 Pergunta de disponibilidade detectada — forçando tool buscar_proximas_datas');
+
+      const availResult = await executeSchedulingTool(
+        'buscar_proximas_datas',
+        { doctor_id: updatedState.doctor_id, dias: 14 },
+        { clinicId: envelope.clinic_id, userPhone: envelope.from }
+      );
+
+      if (availResult?.success && availResult?.dates?.length > 0) {
+        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          last_suggested_dates: availResult.dates,
+        });
+
+        const dateList = availResult.dates
+          .slice(0, 5)
+          .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`)
+          .join('\n');
+
+        decided = {
+          decision_type: 'proceed',
+          message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
+          actions: [{ type: 'log' }],
+          confidence: 1,
+        };
+
+        skipSchedulingAgent = true;
+        step = MAX_STEPS; // pular decide_next_action
+      }
+      // Se a tool falhar, segue o fluxo normal
+    }
+
+    // ======================================================
     // 8) STEP 1: decide_next_action
     // ======================================================
     if (step < MAX_STEPS) {
@@ -1027,6 +1142,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
     // 9) STEP 2: AGENTE DE AGENDAMENTO (apenas quando proceed + scheduling)
     // ======================================================
     if (
+      !skipSchedulingAgent &&
       decided.decision_type === 'proceed' &&
       extracted.intent_group === 'scheduling'
     ) {
@@ -1085,6 +1201,18 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             tool_call_id: toolCall.id,
             content: JSON.stringify(toolResult),
           });
+
+          // Persistir opções apresentadas no estado para suportar respostas como "o primeiro"
+          if (toolCall.function.name === 'buscar_proximas_datas' && toolResult?.success) {
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              last_suggested_dates: toolResult.dates || [],
+            });
+          }
+          if (toolCall.function.name === 'verificar_disponibilidade' && toolResult?.success) {
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              last_suggested_slots: toolResult.available_slots || [],
+            });
+          }
 
           if (DEBUG) {
             log.debug({ tool: toolCall.function.name, result: toolResult }, 'scheduling_tool_executed');

@@ -4,6 +4,11 @@
 // ============================================================
 
 import { createClient } from '@supabase/supabase-js';
+import {
+    getCachedSlots,
+    setCachedSlots,
+    invalidateSlotsCache
+} from './redisService.js';
 
 const supabase = createClient(
     process.env.SUPABASE_URL || 'missing',
@@ -213,6 +218,14 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
             return { success: false, message: 'Não é possível agendar para datas passadas.' };
         }
 
+        // Cache L1: Redis
+        const cached = await getCachedSlots(clinicId, doctorId, date);
+        if (cached) {
+            console.log(`[Scheduling] Cache HIT para ${doctorId} em ${date}`);
+            return cached;
+        }
+        console.log(`[Scheduling] Cache MISS para ${doctorId} em ${date} — buscando no Supabase`);
+
         const dayOfWeek = getDayOfWeek(date);
 
         // Buscar médico (validando que pertence à clínica)
@@ -239,12 +252,21 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
         if (scheduleError) throw scheduleError;
 
         if (!schedules || schedules.length === 0) {
-            return {
+            console.log(`[Scheduling] ${doctor.name} não atende ${DIAS_SEMANA[dayOfWeek]}s — buscando próximas datas`);
+            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21);
+            const resultado = {
                 success: true,
-                message: `${doctor.name} não atende às ${DIAS_SEMANA[dayOfWeek]}s.`,
                 available_slots: [],
-                doctor: doctor
+                doctor: doctor,
+                date: date,
+                no_schedule_this_day: true,
+                next_available_dates: proximasDatas.dates || [],
+                message: proximasDatas.dates?.length > 0
+                    ? `${doctor.name} não atende às ${DIAS_SEMANA[dayOfWeek]}s.\n\n${proximasDatas.message}`
+                    : `${doctor.name} não tem horários disponíveis nos próximos 21 dias. Posso te ajudar com outro médico?`
             };
+            await setCachedSlots(clinicId, doctorId, date, resultado);
+            return resultado;
         }
 
         // Verificar bloqueios de agenda
@@ -303,12 +325,20 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
         }
 
         if (availableSlots.length === 0) {
-            return {
+            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21);
+            const resultado = {
                 success: true,
-                message: `Não há horários disponíveis para ${doctor.name} em ${formatDate(date)}.`,
                 available_slots: [],
-                doctor: doctor
+                doctor: doctor,
+                date: date,
+                fully_booked: true,
+                next_available_dates: proximasDatas.dates || [],
+                message: proximasDatas.dates?.length > 0
+                    ? `Não há horários vagos para ${doctor.name} em ${formatDate(date)}.\n\n${proximasDatas.message}`
+                    : `Não há horários disponíveis para ${doctor.name} em ${formatDate(date)} e nos próximos 21 dias.`
             };
+            await setCachedSlots(clinicId, doctorId, date, resultado);
+            return resultado;
         }
 
         // Agrupar por período
@@ -329,13 +359,15 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
 
         mensagem += `\nQual horário você prefere?`;
 
-        return {
+        const resultado = {
             success: true,
             message: mensagem,
             available_slots: availableSlots,
             doctor: doctor,
             date: date
         };
+        await setCachedSlots(clinicId, doctorId, date, resultado);
+        return resultado;
 
     } catch (error) {
         console.error('Erro ao verificar disponibilidade:', error);
@@ -511,6 +543,9 @@ export async function criarAgendamento(params) {
             throw createError;
         }
 
+        await invalidateSlotsCache(clinicId, doctorId, date);
+        console.log(`[Scheduling] Cache invalidado para ${doctorId} em ${date} após novo agendamento`);
+
         const mensagem = `
 ✅ **Agendamento Confirmado!**
 
@@ -644,6 +679,8 @@ export async function cancelarAgendamento(clinicId, appointmentId, reason = null
             })
             .eq('id', appointmentId)
             .eq('clinic_id', clinicId);
+
+        await invalidateSlotsCache(clinicId, appointment.doctor_id, appointment.appointment_date);
 
         const mensagem = `
 ❌ **Agendamento Cancelado**

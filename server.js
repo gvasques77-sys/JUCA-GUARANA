@@ -8,7 +8,9 @@ import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import adminRoutes from './routes/adminRoutes.js';
+import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
+import { redisHealthCheck } from './services/redisService.js';
 
 // ======================================================
 // STATE MACHINE — Estados explícitos do fluxo de agendamento
@@ -38,6 +40,7 @@ app.use(express.json({ limit: '1mb' }));
 // ======================================================
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminRoutes);
+app.use('/admin/gcal', googleCalendarRoutes);
 
 const log = pino({
   transport: { target: 'pino-pretty' },
@@ -132,8 +135,9 @@ function checkAgentAuth(req, res, next) {
 // ======================================================
 // ROTA DE HEALTH CHECK
 // ======================================================
-app.get('/health', (req, res) => {
-  return res.json({ ok: true, service: 'agent-service' });
+app.get('/health', async (req, res) => {
+    const redis = await redisHealthCheck();
+    return res.json({ ok: true, service: 'agent-service', redis });
 });
 
 // Rota amigavel para navegador

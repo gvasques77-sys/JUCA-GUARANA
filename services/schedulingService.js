@@ -494,16 +494,45 @@ export async function criarAgendamento(params) {
             };
         }
 
-        // Buscar serviço (validando que pertence à clínica)
-        const { data: service, error: serviceError } = await supabase
-            .from('services')
-            .select('*')
-            .eq('id', serviceId)
-            .eq('clinic_id', clinicId)
-            .single();
+        // Buscar serviço — se serviceId não foi fornecido, usar o primeiro serviço do médico
+        let service;
+        if (serviceId) {
+            const { data, error: serviceError } = await supabase
+                .from('services')
+                .select('*')
+                .eq('id', serviceId)
+                .eq('clinic_id', clinicId)
+                .single();
+            if (serviceError || !data) {
+                return { success: false, message: 'Serviço não encontrado.' };
+            }
+            service = data;
+        } else {
+            // Fallback: primeiro serviço do médico
+            const { data: doctorServices } = await supabase
+                .from('doctor_services')
+                .select('services(*)')
+                .eq('doctor_id', doctorId)
+                .eq('clinic_id', clinicId)
+                .limit(1);
+            service = doctorServices?.[0]?.services;
 
-        if (serviceError || !service) {
-            return { success: false, message: 'Serviço não encontrado.' };
+            if (!service) {
+                // Fallback genérico: qualquer serviço ativo da clínica
+                const { data: genericService } = await supabase
+                    .from('services')
+                    .select('*')
+                    .eq('clinic_id', clinicId)
+                    .eq('active', true)
+                    .limit(1)
+                    .single();
+                service = genericService;
+            }
+
+            if (!service) {
+                return { success: false, message: 'Não encontrei nenhum serviço disponível para este médico.' };
+            }
+            console.log(`[Scheduling] serviceId não fornecido — usando serviço fallback: "${service.name}"`);
         }
 
         // Calcular horário de término
@@ -519,7 +548,7 @@ export async function criarAgendamento(params) {
                 clinic_id: clinicId,
                 patient_id: patient.id,
                 doctor_id: doctorId,
-                service_id: serviceId,
+                service_id: service.id,
                 appointment_date: date,
                 start_time: time,
                 end_time: endTime,

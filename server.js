@@ -472,6 +472,36 @@ async function updateConversationState(supabase, clinicId, fromNumber, updates) 
 }
 
 /**
+ * Normaliza variações linguísticas de especialidade antes do match.
+ * Ex.: "ortopedista" → "ortopedia", "cardiologista" → "cardiologia"
+ */
+function normalizeSpecialty(input) {
+  if (!input) return '';
+  const map = {
+    'ortopedista': 'ortopedia',
+    'cardiologista': 'cardiologia',
+    'dermatologista': 'dermatologia',
+    'ginecologista': 'ginecologia',
+    'pediatra': 'pediatria',
+    'nutricionista': 'nutrição',
+    'nutricao': 'nutrição',
+    'psicólogo': 'psicologia',
+    'psicologo': 'psicologia',
+    'esteticista': 'estética',
+    'estetica': 'estética',
+    'clínico': 'clínico geral',
+    'clinico': 'clínico geral',
+    'geral': 'clínico geral',
+  };
+  const normalized = input.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [key, value] of Object.entries(map)) {
+    if (normalized.includes(key)) return value;
+  }
+  return normalized;
+}
+
+/**
  * Merge slots extraídos pelo LLM no estado persistente.
  * Valida especialidade e médico contra dados reais da clínica.
  * Suporta os dois naming conventions do extract_intent.
@@ -487,15 +517,21 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   // Especialidade (extract_intent usa 'specialty_or_reason')
   const specialtyInput = extractedSlots.specialty || extractedSlots.specialty_or_reason;
   if (specialtyInput) {
-    const normalizedSpec = specialtyInput.toLowerCase();
-    const matchingDoctor = doctors.find(d =>
-      d.specialty.toLowerCase().includes(normalizedSpec) ||
-      normalizedSpec.includes(d.specialty.toLowerCase())
-    );
+    const normalizedSpec = normalizeSpecialty(specialtyInput);
+    const matchingDoctor = doctors.find(d => {
+      const docSpec = d.specialty.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const inputNorm = normalizedSpec.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return docSpec.includes(inputNorm) || inputNorm.includes(docSpec);
+    });
     if (matchingDoctor) {
       updates.specialty = matchingDoctor.specialty;
       updates.doctor_name = matchingDoctor.name;
       updates.doctor_id = matchingDoctor.id;
+      console.log(`[MERGE] Especialidade "${specialtyInput}" → ${matchingDoctor.name} (${matchingDoctor.id})`);
+    } else {
+      console.log(`[MERGE] Especialidade "${specialtyInput}" não encontrou match. Disponíveis:`, doctors.map(d => d.specialty));
     }
   }
 
@@ -816,7 +852,10 @@ function applyDeterministicInterceptors(state, messageText) {
   }
 
   // REGRA 2: Tem médico, mas não tem data → DEVE buscar próximas datas disponíveis
-  if (doctor_id && !preferred_date && booking_state === BOOKING_STATES.COLLECTING_DATE) {
+  if (doctor_id && !preferred_date &&
+      booking_state !== BOOKING_STATES.AWAITING_SLOTS &&
+      booking_state !== BOOKING_STATES.CONFIRMING &&
+      booking_state !== BOOKING_STATES.BOOKED) {
     return {
       tool: 'buscar_proximas_datas',
       params: { doctor_id, dias: 14 },
@@ -1444,6 +1483,23 @@ await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
   ...updatedState,
   intent: extracted?.intent || conversationState.intent,
 });
+
+// Se doctor_id foi resolvido agora e booking_state ainda é IDLE → avançar para COLLECTING_DATE
+if (updatedState.doctor_id && !activeConvState.doctor_id &&
+    (!updatedState.booking_state || updatedState.booking_state === BOOKING_STATES.IDLE)) {
+  console.log(`[STATE] doctor_id preenchido → transicionando para COLLECTING_DATE`);
+  await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+    booking_state: BOOKING_STATES.COLLECTING_DATE,
+  });
+  updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
+  logDecision('state_transition', {
+    from: BOOKING_STATES.IDLE,
+    to: BOOKING_STATES.COLLECTING_DATE,
+    trigger: 'doctor_id_resolved',
+    doctor_id: updatedState.doctor_id,
+    doctor_name: updatedState.doctor_name,
+  }, envelope.clinic_id, envelope.from);
+}
 
 console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 

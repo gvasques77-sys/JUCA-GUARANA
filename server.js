@@ -10,6 +10,21 @@ import { fileURLToPath } from 'url';
 import adminRoutes from './routes/adminRoutes.js';
 import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
 
+// ======================================================
+// STATE MACHINE — Estados explícitos do fluxo de agendamento
+// ======================================================
+const BOOKING_STATES = {
+  IDLE: 'idle',
+  COLLECTING_DOCTOR: 'collecting_doctor',
+  COLLECTING_DATE: 'collecting_date',
+  AWAITING_SLOTS: 'awaiting_slots',     // chamou verificar_disponibilidade, aguardando escolha
+  COLLECTING_TIME: 'collecting_time',
+  CONFIRMING: 'confirming',             // mostrou resumo, aguardando "sim"
+  BOOKED: 'booked',
+  RESCHEDULING: 'rescheduling',
+  CANCELLING: 'cancelling',
+};
+
 // Para usar __dirname com ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -277,6 +292,32 @@ async function logKnowledgeGap(clinicId, correlationId, question, context) {
   }
 }
 
+/**
+ * Loga decisões determinísticas do interceptor e transições de estado.
+ * Quando ENABLE_AGENT_DECISION_LOGS=true, também salva em agent_decision_logs.
+ */
+async function logDecision(type, details, clinicId = null, fromNumber = null) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    type, // 'interceptor_trigger' | 'state_transition' | 'tool_forced' | 'tool_validated' | 'session_timeout' | 'confirmation'
+    ...details,
+  };
+  console.log(`[DECISION] ${JSON.stringify(entry)}`);
+
+  if (process.env.ENABLE_AGENT_DECISION_LOGS === 'true' && clinicId) {
+    try {
+      await supabase.from('agent_decision_logs').insert({
+        clinic_id: clinicId,
+        from_number: fromNumber || 'unknown',
+        decision_type: type,
+        details: entry,
+      });
+    } catch (e) {
+      // silencioso — não crítico
+    }
+  }
+}
+
 // ======================================================
 // GERENCIAMENTO DE ESTADO PERSISTENTE
 // ======================================================
@@ -298,14 +339,52 @@ async function loadConversationState(supabase, clinicId, fromNumber) {
 
   if (data) {
     if (new Date(data.expires_at) < new Date()) {
+      console.log(`[STATE] Session expired (24h) for ${fromNumber} — resetting state`);
+      logDecision('session_timeout', { reason: '24h_expires_at', from_number: fromNumber }, clinicId, fromNumber);
       return await resetConversationState(supabase, clinicId, fromNumber);
     }
     // Nova mensagem após agendamento confirmado → nova conversa
     if (data.state_json?.appointment_confirmed) {
-      console.log('🔄 Agendamento anterior confirmado — resetando estado para nova conversa');
+      console.log('[STATE] Agendamento anterior confirmado — resetando estado para nova conversa');
       return await resetConversationState(supabase, clinicId, fromNumber);
     }
-    return data.state_json;
+
+    // Check de timeout de 4h: se o estado de booking está ativo e ficou inativo por muito tempo
+    const SESSION_TIMEOUT_HOURS = Number(process.env.SESSION_TIMEOUT_HOURS || 4);
+    const stateJson = data.state_json || {};
+    if (stateJson.last_activity_at) {
+      const lastActivity = new Date(stateJson.last_activity_at);
+      const hoursElapsed = (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60);
+      const bookingState = stateJson.booking_state;
+      const activeStates = [BOOKING_STATES.COLLECTING_DATE, BOOKING_STATES.AWAITING_SLOTS,
+                            BOOKING_STATES.COLLECTING_TIME, BOOKING_STATES.CONFIRMING];
+      if (hoursElapsed > SESSION_TIMEOUT_HOURS && activeStates.includes(bookingState)) {
+        console.log(`[STATE] Session timeout (${SESSION_TIMEOUT_HOURS}h) for ${fromNumber} — resetting booking state`);
+        logDecision('session_timeout', {
+          reason: `${SESSION_TIMEOUT_HOURS}h_booking_state`,
+          hours_elapsed: hoursElapsed.toFixed(1),
+          booking_state: bookingState,
+          from_number: fromNumber,
+        }, clinicId, fromNumber);
+        // Não reseta tudo — apenas limpa dados de agendamento em andamento
+        const resetUpdates = {
+          ...stateJson,
+          booking_state: BOOKING_STATES.IDLE,
+          preferred_date: null,
+          preferred_date_iso: null,
+          preferred_time: null,
+          last_suggested_slots: [],
+          last_activity_at: new Date().toISOString(),
+        };
+        await supabase.from('conversation_state').update({
+          state_json: resetUpdates,
+          updated_at: new Date().toISOString(),
+        }).eq('clinic_id', clinicId).eq('from_number', fromNumber);
+        return resetUpdates;
+      }
+    }
+
+    return stateJson;
   }
 
   return await resetConversationState(supabase, clinicId, fromNumber);
@@ -335,6 +414,12 @@ async function resetConversationState(supabase, clinicId, fromNumber) {
     last_suggested_dates: [],
     last_suggested_slots: [],
     stuck_counter: {},
+    // State machine de agendamento
+    booking_state: BOOKING_STATES.IDLE,
+    // Memória longa (running summary)
+    running_summary: null,
+    // Timestamp de última atividade (para timeout de 4h)
+    last_activity_at: new Date().toISOString(),
   };
 
   const { error } = await supabase
@@ -362,7 +447,11 @@ async function updateConversationState(supabase, clinicId, fromNumber, updates) 
     .eq('from_number', fromNumber)
     .single();
 
-  const newState = { ...current?.state_json, ...updates };
+  const newState = {
+    ...current?.state_json,
+    ...updates,
+    last_activity_at: new Date().toISOString(), // sempre atualizar para controle de timeout
+  };
 
   const { error } = await supabase
     .from('conversation_state')
@@ -424,16 +513,39 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   // Data (extract_intent usa 'preferred_date_text')
   const dateInput = extractedSlots.preferred_date_text || extractedSlots.preferred_date;
   if (dateInput) {
-    updates.preferred_date = dateInput;
-    if (extractedSlots.preferred_date_iso) {
-      updates.preferred_date_iso = extractedSlots.preferred_date_iso;
+    // Tentar resolver para ISO (YYYY-MM-DD) antes de salvar
+    const resolvedDate = resolveDateChoice(
+      dateInput,
+      currentState.last_suggested_dates || [],
+      new Date()
+    );
+    if (resolvedDate) {
+      updates.preferred_date = resolvedDate;
+      updates.preferred_date_iso = resolvedDate;
+      console.log(`[STATE] Data resolvida: "${dateInput}" → ${resolvedDate}`);
+    } else {
+      // Manter texto original — LLM vai tentar interpretar depois
+      updates.preferred_date = dateInput;
+      if (extractedSlots.preferred_date_iso) {
+        updates.preferred_date_iso = extractedSlots.preferred_date_iso;
+      }
     }
   }
 
   // Horário (extract_intent usa 'preferred_time_text')
   const timeInput = extractedSlots.preferred_time || extractedSlots.preferred_time_text;
   if (timeInput) {
-    updates.preferred_time = timeInput;
+    // Tentar resolver para HH:MM antes de salvar
+    const resolvedTime = resolveTimeChoice(
+      timeInput,
+      currentState.last_suggested_slots || []
+    );
+    if (resolvedTime) {
+      updates.preferred_time = resolvedTime;
+      console.log(`[STATE] Horário resolvido: "${timeInput}" → ${resolvedTime}`);
+    } else {
+      updates.preferred_time = timeInput;
+    }
   }
 
   updates.pending_fields = calculatePendingFields(updates);
@@ -519,6 +631,317 @@ function detectAvailabilityQuestion(text) {
 }
 
 // ======================================================
+// HELPERS DE DATA (nativos — sem library externa)
+// ======================================================
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function formatISO(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function nextWeekday(referenceDate, targetDay) {
+  const result = new Date(referenceDate);
+  const currentDay = result.getDay();
+  let daysUntil = targetDay - currentDay;
+  if (daysUntil <= 0) daysUntil += 7;
+  result.setDate(result.getDate() + daysUntil);
+  return result;
+}
+
+function findClosestSlot(timeStr, slots) {
+  if (!slots || slots.length === 0) return null;
+  const [targetH, targetM] = timeStr.split(':').map(Number);
+  const targetMinutes = targetH * 60 + (targetM || 0);
+  let closest = null;
+  let minDiff = Infinity;
+  for (const slot of slots) {
+    const [h, m] = slot.split(':').map(Number);
+    const diff = Math.abs((h * 60 + m) - targetMinutes);
+    if (diff < minDiff) { minDiff = diff; closest = slot; }
+  }
+  return minDiff <= 60 ? closest : null; // máx 1h de diferença
+}
+
+// ======================================================
+// RESOLUÇÃO DE ESCOLHAS RELATIVAS
+// ======================================================
+
+/**
+ * Converte escolha relativa de data para ISO date string (YYYY-MM-DD).
+ * Exemplos: "amanhã", "segunda", "semana que vem", "dia 15", "a primeira"
+ * @param {string} userInput - texto do usuário
+ * @param {Array} suggestedDates - last_suggested_dates do estado
+ * @param {Date} referenceDate - data de referência (default: agora)
+ * @returns {string|null} YYYY-MM-DD ou null se não resolver
+ */
+function resolveDateChoice(userInput, suggestedDates = [], referenceDate = new Date()) {
+  if (!userInput) return null;
+  const input = userInput.toLowerCase().trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove acentos
+
+  // Referências posicionais (usam last_suggested_dates)
+  if (/prim[ea]ira?|^1[ao°]?$|^1$/.test(input) && suggestedDates[0]) {
+    return suggestedDates[0].date_iso || suggestedDates[0].formatted_date || null;
+  }
+  if (/segunda?|^2[ao°]?$|^2$/.test(input) && suggestedDates[1]) {
+    return suggestedDates[1].date_iso || suggestedDates[1].formatted_date || null;
+  }
+  if (/terceira?|^3[ao°]?$|^3$/.test(input) && suggestedDates[2]) {
+    return suggestedDates[2].date_iso || suggestedDates[2].formatted_date || null;
+  }
+
+  // Datas relativas
+  if (/hoje/.test(input)) return formatISO(referenceDate);
+  if (/amanha/.test(input)) return formatISO(addDays(referenceDate, 1));
+  if (/semana que vem|proxima semana/.test(input)) return formatISO(addDays(referenceDate, 7));
+
+  // Dias da semana: próxima ocorrência
+  const WEEKDAY_MAP = [
+    { pattern: /segunda/, day: 1 },
+    { pattern: /terca|terça/, day: 2 },
+    { pattern: /quarta/, day: 3 },
+    { pattern: /quinta/, day: 4 },
+    { pattern: /sexta/, day: 5 },
+    { pattern: /sabado|sábado/, day: 6 },
+  ];
+  for (const { pattern, day } of WEEKDAY_MAP) {
+    if (pattern.test(input)) return formatISO(nextWeekday(referenceDate, day));
+  }
+
+  // Dia do mês: "dia 15", "15/03", "15 de março"
+  const dayMatch = input.match(/(\d{1,2})\/(\d{1,2})/);
+  if (dayMatch) {
+    const d = parseInt(dayMatch[1]);
+    const m = parseInt(dayMatch[2]) - 1;
+    const year = referenceDate.getFullYear();
+    const candidate = new Date(year, m, d);
+    if (candidate >= referenceDate) return formatISO(candidate);
+    return formatISO(new Date(year + 1, m, d));
+  }
+
+  const singleDayMatch = input.match(/^dia\s+(\d{1,2})$|^(\d{1,2})$/);
+  if (singleDayMatch) {
+    const d = parseInt(singleDayMatch[1] || singleDayMatch[2]);
+    const now = referenceDate;
+    let candidate = new Date(now.getFullYear(), now.getMonth(), d);
+    if (candidate < now) candidate = new Date(now.getFullYear(), now.getMonth() + 1, d);
+    if (!isNaN(candidate.getTime())) return formatISO(candidate);
+  }
+
+  return null; // não conseguiu resolver — LLM vai tentar de novo
+}
+
+/**
+ * Converte escolha relativa de horário para "HH:MM".
+ * Exemplos: "a primeira", "14h", "às 14", "de manhã", "à tarde"
+ * @param {string} userInput - texto do usuário
+ * @param {Array} suggestedSlots - last_suggested_slots do estado (strings "HH:MM")
+ * @returns {string|null} "HH:MM" ou null se não resolver
+ */
+function resolveTimeChoice(userInput, suggestedSlots = []) {
+  if (!userInput) return null;
+  const input = userInput.toLowerCase().trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // Referências posicionais
+  if (/prim[ea]ira?|^1[ao°]?$|^1$/.test(input) && suggestedSlots[0]) return suggestedSlots[0];
+  if (/segunda?|^2[ao°]?$|^2$/.test(input) && suggestedSlots[1]) return suggestedSlots[1];
+  if (/terceira?|^3[ao°]?$|^3$/.test(input) && suggestedSlots[2]) return suggestedSlots[2];
+  if (/quarta?|^4[ao°]?$|^4$/.test(input) && suggestedSlots[3]) return suggestedSlots[3];
+
+  // Períodos do dia
+  if (/manha/.test(input)) {
+    const manha = suggestedSlots.find(s => parseInt(s.split(':')[0]) < 12);
+    if (manha) return manha;
+  }
+  if (/tarde/.test(input)) {
+    const tarde = suggestedSlots.find(s => {
+      const h = parseInt(s.split(':')[0]);
+      return h >= 12 && h < 18;
+    });
+    if (tarde) return tarde;
+  }
+  if (/noite/.test(input)) {
+    const noite = suggestedSlots.find(s => parseInt(s.split(':')[0]) >= 18);
+    if (noite) return noite;
+  }
+
+  // Horário explícito: "14h", "14:00", "às 14", "14h30", "2pm"
+  const hourMatch = input.match(/(\d{1,2})(?::(\d{2}))?h?/);
+  if (hourMatch) {
+    const h = hourMatch[1].padStart(2, '0');
+    const m = hourMatch[2] || '00';
+    const formatted = `${h}:${m}`;
+    const exact = suggestedSlots.find(s => s === formatted);
+    if (exact) return exact;
+    const closest = findClosestSlot(formatted, suggestedSlots);
+    if (closest) return closest;
+    // Se não há lista de slots mas o horário parece válido, retornar mesmo assim
+    if (parseInt(h) >= 6 && parseInt(h) <= 22) return formatted;
+  }
+
+  return null;
+}
+
+// ======================================================
+// INTERCEPTORES DETERMINÍSTICOS
+// ======================================================
+
+/**
+ * Deve ser executada ANTES do LLM a cada step.
+ * Retorna uma `forcedToolCall` (ou null se o LLM pode decidir livremente).
+ */
+function applyDeterministicInterceptors(state, messageText) {
+  const { doctor_id, preferred_date, preferred_time, booking_state } = state;
+
+  // REGRA 1: Tem médico e data, mas não tem horário → DEVE verificar disponibilidade
+  if (doctor_id && preferred_date && !preferred_time && booking_state !== BOOKING_STATES.AWAITING_SLOTS) {
+    return {
+      tool: 'verificar_disponibilidade',
+      params: { doctor_id, date: preferred_date },
+      reason: 'guard_rail: date_set_no_time',
+    };
+  }
+
+  // REGRA 2: Tem médico, mas não tem data → DEVE buscar próximas datas disponíveis
+  if (doctor_id && !preferred_date && booking_state === BOOKING_STATES.COLLECTING_DATE) {
+    return {
+      tool: 'buscar_proximas_datas',
+      params: { doctor_id, dias: 14 },
+      reason: 'guard_rail: doctor_set_no_date',
+    };
+  }
+
+  // REGRA 3: Estado CONFIRMING — não chamar nenhuma tool, apenas aguardar "sim"/"não"
+  if (booking_state === BOOKING_STATES.CONFIRMING) {
+    return { tool: '__await_confirmation__', params: {}, reason: 'guard_rail: awaiting_confirmation' };
+  }
+
+  return null; // LLM decide livremente
+}
+
+// ======================================================
+// VALIDAÇÃO DE RETORNO DE TOOLS
+// ======================================================
+
+/**
+ * Valida o retorno de tools de disponibilidade antes de usar.
+ */
+function validateAvailabilityResult(toolResult, tool) {
+  if (!toolResult || toolResult.error) {
+    return {
+      valid: false,
+      fallback: tool === 'verificar_disponibilidade'
+        ? 'Não encontrei horários disponíveis nessa data. Vou buscar as próximas datas com vagas.'
+        : 'Não consegui buscar as datas disponíveis no momento.',
+    };
+  }
+
+  if (tool === 'verificar_disponibilidade') {
+    const slots = toolResult.slots || toolResult.available_slots || [];
+    if (!Array.isArray(slots) || slots.length === 0) {
+      return {
+        valid: false,
+        noSlots: true,
+        fallback: 'Essa data não tem horários disponíveis. Quer que eu busque as próximas datas com vagas?',
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+// ======================================================
+// CONFIRMAÇÃO OBRIGATÓRIA ANTES DE AGENDAR
+// ======================================================
+
+/**
+ * Formata data ISO (YYYY-MM-DD) para pt-BR.
+ */
+function formatDateBR(dateStr) {
+  if (!dateStr) return '[DATA NÃO DEFINIDA]';
+  // Se já é formato pt-BR (DD/MM/YYYY), retornar direto
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
+  try {
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('pt-BR');
+  } catch {
+    return dateStr;
+  }
+}
+
+/**
+ * Gera mensagem de confirmação do agendamento para o usuário.
+ */
+function buildConfirmationMessage(state, doctorName, clinicName) {
+  const { preferred_date, preferred_time, patient_name } = state;
+  const dateFormatted = formatDateBR(preferred_date);
+  const doctor = doctorName || state.doctor_name || '[MÉDICO]';
+  const clinic = clinicName || 'Clínica';
+
+  return `✅ *Confirmar agendamento?*\n\n` +
+    `👤 Paciente: ${patient_name || 'não informado'}\n` +
+    `👨‍⚕️ Médico: ${doctor}\n` +
+    `📅 Data: ${dateFormatted}\n` +
+    `🕐 Horário: ${preferred_time}\n` +
+    `🏥 Clínica: ${clinic}\n\n` +
+    `Responda *SIM* para confirmar ou *NÃO* para cancelar.`;
+}
+
+// ======================================================
+// DYNAMIC SYSTEM PROMPT (com estado como fonte da verdade)
+// ======================================================
+
+// ======================================================
+// RUNNING SUMMARY — Memória longa comprimida
+// ======================================================
+
+/**
+ * Gera resumo comprimido a cada SUMMARY_TRIGGER_MESSAGES mensagens.
+ * Salva em state.running_summary para injeção no system prompt.
+ */
+async function maybeGenerateSummary(conversationHistory, state, openaiClient) {
+  const TRIGGER = Number(process.env.SUMMARY_TRIGGER_MESSAGES || 10);
+  if (conversationHistory.length < TRIGGER) return state;
+  if (conversationHistory.length % TRIGGER !== 0) return state;
+
+  try {
+    const historyText = conversationHistory
+      .slice(-TRIGGER)
+      .map(m => `${m.role}: ${m.content}`)
+      .join('\n');
+
+    const summaryResponse = await openaiClient.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{
+        role: 'user',
+        content: `Resuma em 3-5 frases o que foi discutido nesta conversa de atendimento médico, ` +
+          `focando em: nome do paciente, médico de interesse, datas mencionadas, intenção principal.\n\n` +
+          `Conversa:\n${historyText}`,
+      }],
+      max_tokens: 200,
+      temperature: 0.1,
+    });
+
+    const summary = summaryResponse.choices[0].message.content;
+    const updatedState = { ...state, running_summary: summary };
+    console.log(`[SUMMARY] Generated: ${summary.substring(0, 80)}...`);
+    return updatedState;
+  } catch (e) {
+    console.warn('[SUMMARY] Failed to generate summary:', e.message);
+    return state;
+  }
+}
+
+// ======================================================
 // DYNAMIC SYSTEM PROMPT (com estado como fonte da verdade)
 // ======================================================
 
@@ -549,8 +972,11 @@ ${(cs.last_suggested_slots || []).length > 0
   : ''}
 `.trim();
 
-  return `
-## IDENTIDADE
+  const summarySection = cs.running_summary
+    ? `## RESUMO DA CONVERSA ANTERIOR:\n${cs.running_summary}\n\n---\n\n`
+    : '';
+
+  return `${summarySection}## IDENTIDADE
 Você é Juca, secretária virtual da clínica. Seja acolhedora, profissional e humana.
 
 ## TOM DE VOZ
@@ -968,6 +1394,17 @@ const messages = [
 // NOVO: Log para debug
 console.log(`📜 Histórico: ${previousMessages.length} mensagens anteriores`);
 
+// Gerar summary comprimido se conversa está longa
+let activeConvState = conversationState;
+if (previousMessages.length > 0) {
+  activeConvState = await maybeGenerateSummary(previousMessages, conversationState, openai);
+  if (activeConvState.running_summary !== conversationState.running_summary) {
+    await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+      running_summary: activeConvState.running_summary,
+    });
+  }
+}
+
 const extraction = await openai.chat.completions.create(
   {
     model: OPENAI_MODEL,
@@ -992,7 +1429,7 @@ if (DEBUG) {
 
 // ========== MERGEAR SLOTS NO ESTADO PERSISTENTE ==========
 const updatedState = mergeExtractedSlots(
-  conversationState,
+  activeConvState,
   extracted?.slots || {},
   doctors,
   services
@@ -1021,47 +1458,199 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
     }
 
     // ======================================================
-    // 7b) INTERCEPTOR DE DISPONIBILIDADE
-    // Quando usuário pergunta disponibilidade e temos médico no estado,
-    // forçar chamada da tool em vez de perguntar a data.
+    // 7b) CHECK DE ESTADO CONFIRMING (ANTES do LLM)
+    // Quando todos os campos estão preenchidos → pedir confirmação.
+    // Quando usuário responde SIM/NÃO → executar ação.
     // ======================================================
-    const isAvailabilityQuery = detectAvailabilityQuestion(envelope.message_text);
-    const hasDoctorInState = !!(updatedState.doctor_id);
+    const allFieldsReady = (state) => calculatePendingFields(state).length === 0;
+    const userSaidConfirmation = envelope.message_text.toLowerCase().trim();
 
-    if (
-      isAvailabilityQuery &&
-      hasDoctorInState &&
+    if (updatedState.booking_state === BOOKING_STATES.CONFIRMING) {
+      logDecision('confirmation', {
+        user_said: userSaidConfirmation,
+        booking_state: BOOKING_STATES.CONFIRMING,
+      }, envelope.clinic_id, envelope.from);
+
+      if (/^sim|^s$|confirmar|^ok$|^yes/.test(userSaidConfirmation)) {
+        // Usuário confirmou → avançar para BOOKED e deixar scheduling agent criar
+        const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          booking_state: BOOKING_STATES.BOOKED,
+        });
+        Object.assign(updatedState, newState);
+        logDecision('state_transition', {
+          from: BOOKING_STATES.CONFIRMING,
+          to: BOOKING_STATES.BOOKED,
+          trigger: 'user_confirmed',
+        }, envelope.clinic_id, envelope.from);
+        // Continua o flow — scheduling agent vai chamar criar_agendamento
+
+      } else if (/^n[aã]o|^n$|cancelar|^no$/.test(userSaidConfirmation)) {
+        // Usuário cancelou → resetar campos de data/hora
+        const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          booking_state: BOOKING_STATES.IDLE,
+          preferred_date: null,
+          preferred_date_iso: null,
+          preferred_time: null,
+        });
+        logDecision('state_transition', {
+          from: BOOKING_STATES.CONFIRMING,
+          to: BOOKING_STATES.IDLE,
+          trigger: 'user_cancelled',
+        }, envelope.clinic_id, envelope.from);
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊',
+          actions: [],
+          debug: DEBUG ? { state: newState } : undefined,
+        });
+
+      } else {
+        // Resposta ambígua → reenviar mensagem de confirmação
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name),
+          actions: [],
+          debug: DEBUG ? { booking_state: BOOKING_STATES.CONFIRMING } : undefined,
+        });
+      }
+    } else if (
+      allFieldsReady(updatedState) &&
+      updatedState.booking_state !== BOOKING_STATES.BOOKED &&
       extracted?.intent_group === 'scheduling'
     ) {
-      log.info({ doctorId: updatedState.doctor_id }, '🔍 Pergunta de disponibilidade detectada — forçando tool buscar_proximas_datas');
+      // Todos os campos preenchidos → entrar em CONFIRMING
+      await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+        booking_state: BOOKING_STATES.CONFIRMING,
+      });
+      logDecision('state_transition', {
+        from: updatedState.booking_state,
+        to: BOOKING_STATES.CONFIRMING,
+        trigger: 'all_fields_ready',
+      }, envelope.clinic_id, envelope.from);
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name),
+        actions: [{ type: 'confirmation_requested' }],
+        debug: DEBUG ? { booking_state: BOOKING_STATES.CONFIRMING } : undefined,
+      });
+    }
 
-      const availResult = await executeSchedulingTool(
-        'buscar_proximas_datas',
-        { doctor_id: updatedState.doctor_id, dias: 14 },
+    // ======================================================
+    // 7c) INTERCEPTORES DETERMINÍSTICOS
+    // Substitui o detectAvailabilityQuestion anterior.
+    // ======================================================
+    const forcedCall = applyDeterministicInterceptors(updatedState, envelope.message_text);
+
+    if (forcedCall && forcedCall.tool !== '__await_confirmation__') {
+      logDecision('tool_forced', {
+        tool: forcedCall.tool,
+        reason: forcedCall.reason,
+        booking_state: updatedState.booking_state,
+      }, envelope.clinic_id, envelope.from);
+      console.log(`[INTERCEPTOR] Forced tool: ${forcedCall.tool} — reason: ${forcedCall.reason}`);
+
+      const toolResult = await executeSchedulingTool(
+        forcedCall.tool,
+        forcedCall.params,
         { clinicId: envelope.clinic_id, userPhone: envelope.from }
       );
 
-      if (availResult?.success && availResult?.dates?.length > 0) {
-        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-          last_suggested_dates: availResult.dates,
-        });
+      const validation = validateAvailabilityResult(toolResult, forcedCall.tool);
+      logDecision('tool_validated', {
+        tool: forcedCall.tool,
+        valid: validation.valid,
+        slots_returned: toolResult?.available_slots?.length || toolResult?.dates?.length || 0,
+      }, envelope.clinic_id, envelope.from);
 
-        const dateList = availResult.dates
-          .slice(0, 5)
-          .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`)
-          .join('\n');
-
+      if (!validation.valid && validation.noSlots) {
+        // Sem slots → fallback automático para buscar próximas datas
+        console.log('[INTERCEPTOR] No slots found — falling back to buscar_proximas_datas');
+        const fallbackResult = await executeSchedulingTool(
+          'buscar_proximas_datas',
+          { doctor_id: updatedState.doctor_id, dias: 14 },
+          { clinicId: envelope.clinic_id, userPhone: envelope.from }
+        );
+        if (fallbackResult?.success && fallbackResult?.dates?.length > 0) {
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            last_suggested_dates: fallbackResult.dates,
+            booking_state: BOOKING_STATES.COLLECTING_DATE,
+          });
+          const dateList = fallbackResult.dates.slice(0, 5)
+            .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
+          decided = {
+            decision_type: 'proceed',
+            message: `Essa data não tem horários disponíveis. As próximas datas com vagas para ${updatedState.doctor_name} são:\n${dateList}\n\nQual dessas datas funciona melhor?`,
+            actions: [{ type: 'log' }],
+            confidence: 1,
+          };
+          skipSchedulingAgent = true;
+          step = MAX_STEPS;
+        }
+      } else if (toolResult?.success) {
+        if (forcedCall.tool === 'buscar_proximas_datas' && toolResult?.dates?.length > 0) {
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            last_suggested_dates: toolResult.dates,
+            booking_state: BOOKING_STATES.COLLECTING_DATE,
+          });
+          const dateList = toolResult.dates.slice(0, 5)
+            .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
+          decided = {
+            decision_type: 'proceed',
+            message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
+            actions: [{ type: 'log' }],
+            confidence: 1,
+          };
+          skipSchedulingAgent = true;
+          step = MAX_STEPS;
+        } else if (forcedCall.tool === 'verificar_disponibilidade') {
+          const slots = toolResult.available_slots || toolResult.slots || [];
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            last_suggested_slots: slots,
+            booking_state: BOOKING_STATES.AWAITING_SLOTS,
+          });
+          // Deixa o scheduling agent formatar a resposta com os slots
+          // Injetar resultado no contexto para o LLM
+        }
+      } else if (!validation.valid) {
         decided = {
           decision_type: 'proceed',
-          message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
+          message: validation.fallback,
           actions: [{ type: 'log' }],
           confidence: 1,
         };
-
         skipSchedulingAgent = true;
-        step = MAX_STEPS; // pular decide_next_action
+        step = MAX_STEPS;
       }
-      // Se a tool falhar, segue o fluxo normal
+    } else if (!forcedCall) {
+      // LLM decide livremente — manter flow normal com detectAvailabilityQuestion como fallback
+      const isAvailabilityQuery = detectAvailabilityQuestion(envelope.message_text);
+      const hasDoctorInState = !!(updatedState.doctor_id);
+      if (isAvailabilityQuery && hasDoctorInState && extracted?.intent_group === 'scheduling') {
+        console.log('[INTERCEPTOR] Availability question detected — forcing buscar_proximas_datas');
+        const availResult = await executeSchedulingTool(
+          'buscar_proximas_datas',
+          { doctor_id: updatedState.doctor_id, dias: 14 },
+          { clinicId: envelope.clinic_id, userPhone: envelope.from }
+        );
+        if (availResult?.success && availResult?.dates?.length > 0) {
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            last_suggested_dates: availResult.dates,
+          });
+          const dateList = availResult.dates.slice(0, 5)
+            .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
+          decided = {
+            decision_type: 'proceed',
+            message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
+            actions: [{ type: 'log' }],
+            confidence: 1,
+          };
+          skipSchedulingAgent = true;
+          step = MAX_STEPS;
+        }
+      }
     }
 
     // ======================================================
@@ -1202,16 +1791,62 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             content: JSON.stringify(toolResult),
           });
 
+          // Validar resultado de tools de disponibilidade
+          const availTools = ['verificar_disponibilidade', 'buscar_proximas_datas'];
+          if (availTools.includes(toolCall.function.name)) {
+            const valResult = validateAvailabilityResult(toolResult, toolCall.function.name);
+            logDecision('tool_validated', {
+              tool: toolCall.function.name,
+              valid: valResult.valid,
+              slots_returned: toolResult?.available_slots?.length || toolResult?.dates?.length || 0,
+            }, envelope.clinic_id, envelope.from);
+
+            if (!valResult.valid && valResult.noSlots && toolCall.function.name === 'verificar_disponibilidade') {
+              // Sem slots nessa data → fallback automático
+              console.log('[TOOL] No slots — auto-fallback to buscar_proximas_datas');
+              const fallbackRes = await executeSchedulingTool(
+                'buscar_proximas_datas',
+                { doctor_id: updatedState.doctor_id, dias: 14 },
+                { clinicId: envelope.clinic_id, userPhone: envelope.from }
+              );
+              // Injetar resultado do fallback como resposta da tool
+              agentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id + '_fallback',
+                content: JSON.stringify(fallbackRes || { error: 'sem datas disponíveis' }),
+              });
+              if (fallbackRes?.dates?.length > 0) {
+                await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+                  last_suggested_dates: fallbackRes.dates,
+                  booking_state: BOOKING_STATES.COLLECTING_DATE,
+                });
+              }
+            }
+          }
+
           // Persistir opções apresentadas no estado para suportar respostas como "o primeiro"
           if (toolCall.function.name === 'buscar_proximas_datas' && toolResult?.success) {
             await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
               last_suggested_dates: toolResult.dates || [],
+              booking_state: BOOKING_STATES.COLLECTING_DATE,
             });
           }
           if (toolCall.function.name === 'verificar_disponibilidade' && toolResult?.success) {
             await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
               last_suggested_slots: toolResult.available_slots || [],
+              booking_state: BOOKING_STATES.AWAITING_SLOTS,
             });
+          }
+          if (toolCall.function.name === 'criar_agendamento' && toolResult?.success) {
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              booking_state: BOOKING_STATES.BOOKED,
+              appointment_confirmed: true,
+            });
+            logDecision('state_transition', {
+              from: BOOKING_STATES.BOOKED,
+              to: 'appointment_confirmed',
+              trigger: 'criar_agendamento_success',
+            }, envelope.clinic_id, envelope.from);
           }
 
           if (DEBUG) {

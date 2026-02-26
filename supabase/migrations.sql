@@ -274,3 +274,44 @@ DROP TRIGGER IF EXISTS trg_conversation_state_updated_at ON public.conversation_
 CREATE TRIGGER trg_conversation_state_updated_at
   BEFORE UPDATE ON public.conversation_state
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- =======================================================
+-- PARTE 10: Guard Rails Determinísticos + State Machine
+-- Ticket: Guard Rails + BOOKING_STATES + agent_decision_logs
+-- Execute este bloco no Supabase SQL Editor
+-- =======================================================
+
+-- 10.1 Novos campos ao conversation_state via state_json JSONB
+-- (booking_state, running_summary, last_activity_at são campos do state_json — sem ALTER TABLE necessário)
+-- Registrar índice adicional para consulta por booking_state
+CREATE INDEX IF NOT EXISTS idx_conversation_state_updated
+  ON public.conversation_state(updated_at);
+
+-- 10.2 Tabela de logs de decisões do agente (observabilidade)
+CREATE TABLE IF NOT EXISTS public.agent_decision_logs (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id     UUID REFERENCES public.clinic_settings(clinic_id) ON DELETE CASCADE,
+  from_number   TEXT NOT NULL,
+  decision_type TEXT NOT NULL, -- 'interceptor_trigger' | 'state_transition' | 'tool_forced' | 'tool_validated' | 'session_timeout' | 'confirmation'
+  details       JSONB,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Índice para consulta por conversa
+CREATE INDEX IF NOT EXISTS idx_agent_decision_logs_number
+  ON public.agent_decision_logs(from_number, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_decision_logs_clinic
+  ON public.agent_decision_logs(clinic_id, created_at DESC);
+
+-- RLS
+ALTER TABLE public.agent_decision_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "agent_decision_logs_isolation" ON public.agent_decision_logs;
+CREATE POLICY "agent_decision_logs_isolation"
+  ON public.agent_decision_logs
+  FOR ALL
+  USING (
+    auth.role() = 'service_role'
+    OR clinic_id = (current_setting('app.clinic_id', true))::uuid
+  );

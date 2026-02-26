@@ -203,6 +203,55 @@ export async function listarServicos(clinicId, doctorId = null) {
 }
 
 /**
+ * Versão interna — verifica disponibilidade SEM fallback recursivo.
+ * Usada por buscarProximasDatasDisponiveis para evitar recursão infinita.
+ */
+async function verificarDisponibilidadeSimples(clinicId, doctorId, date) {
+    const dayOfWeek = getDayOfWeek(date);
+
+    const { data: schedules } = await supabase
+        .from('schedules')
+        .select('start_time, end_time, slot_duration_minutes')
+        .eq('doctor_id', doctorId)
+        .eq('clinic_id', clinicId)
+        .eq('day_of_week', dayOfWeek)
+        .eq('active', true);
+
+    if (!schedules || schedules.length === 0) return [];
+
+    const { data: blocks } = await supabase
+        .from('schedule_blocks')
+        .select('id')
+        .eq('clinic_id', clinicId)
+        .or(`doctor_id.eq.${doctorId},doctor_id.is.null`)
+        .lte('start_date', date)
+        .gte('end_date', date);
+
+    if (blocks && blocks.length > 0) return [];
+
+    let allSlots = [];
+    for (const schedule of schedules) {
+        const slots = generateTimeSlots(
+            schedule.start_time,
+            schedule.end_time,
+            schedule.slot_duration_minutes || 30
+        );
+        allSlots = [...allSlots, ...slots];
+    }
+
+    const { data: appointments } = await supabase
+        .from('appointments')
+        .select('start_time')
+        .eq('clinic_id', clinicId)
+        .eq('doctor_id', doctorId)
+        .eq('appointment_date', date)
+        .not('status', 'in', '("cancelled","no_show")');
+
+    const occupied = new Set(appointments?.map(a => formatTime(a.start_time)) || []);
+    return allSlots.filter(s => !occupied.has(s));
+}
+
+/**
  * Verifica disponibilidade de horários para um médico em uma data
  * @param {string} clinicId - UUID da clínica (obrigatório para isolamento multi-tenant)
  * @param {string} doctorId - UUID do médico
@@ -386,19 +435,21 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
         const datasDisponiveis = [];
         const hoje = new Date();
 
-        for (let i = 0; i < days; i++) {
+        for (let i = 1; i <= days; i++) {   // começa em 1 (amanhã)
             const data = new Date(hoje);
             data.setDate(data.getDate() + i);
             const dateStr = data.toISOString().split('T')[0];
 
-            const resultado = await verificarDisponibilidade(clinicId, doctorId, dateStr);
+            // USA A VERSÃO SIMPLES — sem fallback recursivo
+            const slots = await verificarDisponibilidadeSimples(clinicId, doctorId, dateStr);
 
-            if (resultado.success && resultado.available_slots?.length > 0) {
+            if (slots.length > 0) {
                 datasDisponiveis.push({
                     date: dateStr,
+                    date_iso: dateStr,
                     formatted_date: formatDate(dateStr),
                     day_of_week: DIAS_SEMANA[getDayOfWeek(dateStr)],
-                    slots_count: resultado.available_slots.length
+                    slots_count: slots.length
                 });
             }
 
@@ -413,12 +464,11 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
             };
         }
 
-        let mensagem = `📅 **Próximas datas disponíveis:**\n\n`;
+        let mensagem = `Próximas datas disponíveis:\n\n`;
         datasDisponiveis.forEach((d, idx) => {
-            mensagem += `${idx + 1}. **${d.day_of_week}, ${d.formatted_date}**\n`;
-            mensagem += `   ⏰ ${d.slots_count} horários disponíveis\n\n`;
+            mensagem += `${idx + 1}. ${d.day_of_week}, ${d.formatted_date} — ${d.slots_count} horários\n`;
         });
-        mensagem += `Qual data você prefere?`;
+        mensagem += `\nQual data você prefere?`;
 
         return { success: true, message: mensagem, dates: datasDisponiveis };
 

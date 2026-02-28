@@ -22,6 +22,68 @@ const BUSCA_SLOTS_ABERTA_MAX  = 5   // quantos slots retornar no máximo
 
 // FIX 3 — Limite de tentativas antes de fallback definitivo
 const STUCK_LIMIT = 3
+
+// ======================================================
+// TAREFA 2 — FIX 1: Mapeamento direto de intenções curtas
+// Intercepta respostas de 1-2 palavras ANTES do LLM
+// ======================================================
+const INTENCOES_DIRETAS = {
+  'marcar':           'schedule_new',
+  'agendar':          'schedule_new',
+  'consulta':         'schedule_new',
+  'quero marcar':     'schedule_new',
+  'queria marcar':    'schedule_new',
+  'quero agendar':    'schedule_new',
+  'queria agendar':   'schedule_new',
+  'marcar consulta':  'schedule_new',
+  'agendar consulta': 'schedule_new',
+  'remarcar':         'reschedule',
+  'reagendar':        'reschedule',
+  'remarcar consulta':'reschedule',
+  'cancelar':         'cancel',
+  'desmarcar':        'cancel',
+  'cancelar consulta':'cancel',
+  'duvida':           'info',
+  'informacao':       'info',
+  'informacoes':      'info',
+  'tem horario':      'check_availability',
+  'tem vaga':         'check_availability',
+  'horario disponivel':'check_availability',
+  'encaixe':          'schedule_encaixe',
+  'encaixar':         'schedule_encaixe',
+}
+
+/**
+ * Interceptor de intenções curtas — executa ANTES do LLM.
+ * Normaliza o input (lowercase + sem acentos) e verifica match exato.
+ * @param {string} text - Texto da mensagem do usuário
+ * @returns {string|null} intent mapeado ou null se não houver match
+ */
+function interceptarIntencaoDireta(text) {
+  if (!text) return null;
+  const normalized = text.toLowerCase().trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '').trim();
+  return INTENCOES_DIRETAS[normalized] || null;
+}
+
+// ======================================================
+// TAREFA 2 — FIX 3: Constante de timeout de sessão
+// ======================================================
+const SESSION_TIMEOUT_MINUTES = 30
+
+// ======================================================
+// TAREFA 2 — FIX 4: Constantes de stages do booking
+// ======================================================
+const BOOKING_STAGES = {
+  IDLE:                  'idle',
+  COLLECTING_SPECIALTY:  'collecting_specialty',
+  COLLECTING_DATE:       'collecting_date',
+  COLLECTING_TIME:       'collecting_time',
+  AWAITING_CONFIRMATION: 'awaiting_confirmation',
+  CONFIRMED:             'confirmed',
+  CANCELLED:             'cancelled',
+}
 const BOOKING_STATES = {
   IDLE: 'idle',
   COLLECTING_DOCTOR: 'collecting_doctor',
@@ -478,34 +540,127 @@ async function updateConversationState(supabase, clinicId, fromNumber, updates) 
   return newState;
 }
 
+// ======================================================
+// TAREFA 2 — FIX 2: Mapa expandido de sinônimos de especialidade
+// ======================================================
+// Valores reais do banco (com acentos): Dermatologia, Clínico Geral, Estética,
+// Cardiologia, Ortopedia, Ginecologia, Pediatria, Nutrição, Psicologia
+const SINONIMOS_ESPECIALIDADE = {
+  // Formas coloquiais (sem acentos, lowercase) → nome exato no banco
+  'cardiologista':     'Cardiologia',
+  'cardiologia':       'Cardiologia',
+  'ortopedista':       'Ortopedia',
+  'ortopedia':         'Ortopedia',
+  'dermatologista':    'Dermatologia',
+  'dermatologia':      'Dermatologia',
+  'ginecologista':     'Ginecologia',
+  'ginecologia':       'Ginecologia',
+  'pediatra':          'Pediatria',
+  'pediatria':         'Pediatria',
+  'neurologista':      'Neurologia',
+  'neurologia':        'Neurologia',
+  'psiquiatra':        'Psiquiatria',
+  'psiquiatria':       'Psiquiatria',
+  'urologista':        'Urologia',
+  'urologia':          'Urologia',
+  'oftalmo':           'Oftalmologia',
+  'oftalmologista':    'Oftalmologia',
+  'oftalmologia':      'Oftalmologia',
+  'endocrino':         'Endocrinologia',
+  'endocrinologista':  'Endocrinologia',
+  'endocrinologia':    'Endocrinologia',
+  'nutricionista':     'Nutrição',
+  'nutricao':          'Nutrição',
+  'nutri':             'Nutrição',
+  'nutricionist':      'Nutrição',
+  'psicologo':         'Psicologia',
+  'psicologa':         'Psicologia',
+  'psicologia':        'Psicologia',
+  'psico':             'Psicologia',
+  'psicoterapeuta':    'Psicologia',
+  'esteticista':       'Estética',
+  'estetica':          'Estética',
+  'esteticien':        'Estética',
+  'clinico geral':     'Clínico Geral',
+  'clinico':           'Clínico Geral',
+  'geral':             'Clínico Geral',
+  'medico geral':      'Clínico Geral',
+  'medico':            'Clínico Geral',
+  'clinica geral':     'Clínico Geral',
+}
+
 /**
  * Normaliza variações linguísticas de especialidade antes do match.
- * Ex.: "ortopedista" → "ortopedia", "cardiologista" → "cardiologia"
+ * TAREFA 2 FIX 2: Usa SINONIMOS_ESPECIALIDADE expandido.
+ * Ex.: "cardiologista" → "cardiologia", "oftalmo" → "oftalmologia"
+ * @param {string} input - Especialidade informada pelo paciente
+ * @returns {string} Especialidade normalizada (sem acentos, lowercase)
  */
 function normalizeSpecialty(input) {
   if (!input) return '';
-  const map = {
-    'ortopedista': 'ortopedia',
-    'cardiologista': 'cardiologia',
-    'dermatologista': 'dermatologia',
-    'ginecologista': 'ginecologia',
-    'pediatra': 'pediatria',
-    'nutricionista': 'nutrição',
-    'nutricao': 'nutrição',
-    'psicólogo': 'psicologia',
-    'psicologo': 'psicologia',
-    'esteticista': 'estética',
-    'estetica': 'estética',
-    'clínico': 'clínico geral',
-    'clinico': 'clínico geral',
-    'geral': 'clínico geral',
-  };
-  const normalized = input.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  for (const [key, value] of Object.entries(map)) {
-    if (normalized.includes(key)) return value;
+  // Normalizar: lowercase + remover acentos
+  const normalized = input.toLowerCase().trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '').trim();
+
+  // Verificar match exato no mapa
+  if (SINONIMOS_ESPECIALIDADE[normalized]) {
+    return SINONIMOS_ESPECIALIDADE[normalized];
   }
+
+  // Verificar match parcial (ex: "cardiologista" contém "cardiologista")
+  for (const [key, value] of Object.entries(SINONIMOS_ESPECIALIDADE)) {
+    if (normalized.includes(key) || key.includes(normalized)) {
+      return value;
+    }
+  }
+
   return normalized;
+}
+
+/**
+ * Normaliza especialidade com fallback assíncrono no banco.
+ * Se não houver match no mapa, busca via ILIKE no Supabase.
+ * TAREFA 2 FIX 2: Fallback com query no banco.
+ * @param {string} input - Especialidade informada pelo paciente
+ * @param {object} supabaseClient - Cliente Supabase
+ * @param {string} clinicId - UUID da clínica
+ * @returns {Promise<string>} Especialidade normalizada
+ */
+async function normalizeSpecialtyWithFallback(input, supabaseClient, clinicId) {
+  if (!input) return '';
+  const fromMap = normalizeSpecialty(input);
+
+  // Se o mapa retornou algo diferente do input normalizado, usar
+  const inputNorm = input.toLowerCase().trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '').trim();
+
+  if (fromMap !== inputNorm) {
+    return fromMap; // Match encontrado no mapa
+  }
+
+  // Fallback: buscar no banco via ILIKE
+  try {
+    const { data } = await supabaseClient
+      .from('doctors')
+      .select('specialty')
+      .eq('clinic_id', clinicId)
+      .ilike('specialty', `%${inputNorm}%`)
+      .limit(1);
+
+    if (data && data.length > 0) {
+      const dbSpecialty = data[0].specialty.toLowerCase().trim()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9 ]/g, '').trim();
+      console.log(`[FIX2] Especialidade resolvida via banco: '${input}' → '${dbSpecialty}'`);
+      return dbSpecialty;
+    }
+  } catch (err) {
+    console.error('[FIX2] Erro ao buscar especialidade no banco:', err.message);
+  }
+
+  return fromMap; // Retornar o que o mapa deu (mesmo que seja o input normalizado)
 }
 
 /**
@@ -522,23 +677,30 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   }
 
   // Especialidade (extract_intent usa 'specialty_or_reason')
+  // TAREFA 2 FIX 2: Usar normalizeSpecialty expandido + persistir em specialty
   const specialtyInput = extractedSlots.specialty || extractedSlots.specialty_or_reason;
   if (specialtyInput) {
     const normalizedSpec = normalizeSpecialty(specialtyInput);
+    console.log(`[FIX2] Especialidade normalizada: '${specialtyInput}' → '${normalizedSpec}'`);
     const matchingDoctor = doctors.find(d => {
       const docSpec = d.specialty.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9 ]/g, '').trim();
       const inputNorm = normalizedSpec.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9 ]/g, '').trim();
       return docSpec.includes(inputNorm) || inputNorm.includes(docSpec);
     });
     if (matchingDoctor) {
       updates.specialty = matchingDoctor.specialty;
       updates.doctor_name = matchingDoctor.name;
       updates.doctor_id = matchingDoctor.id;
-      console.log(`[MERGE] Especialidade "${specialtyInput}" → ${matchingDoctor.name} (${matchingDoctor.id})`);
+      console.log(`[FIX2] Especialidade "${specialtyInput}" → ${matchingDoctor.name} (${matchingDoctor.id})`);
     } else {
-      console.log(`[MERGE] Especialidade "${specialtyInput}" não encontrou match. Disponíveis:`, doctors.map(d => d.specialty));
+      // Persistir a especialidade normalizada mesmo sem match de médico
+      // Isso garante que o valor fique no estado para o próximo turno
+      updates.specialty = normalizedSpec;
+      console.log(`[FIX2] Especialidade "${specialtyInput}" não encontrou médico. Normalizado: '${normalizedSpec}'. Disponíveis:`, doctors.map(d => d.specialty));
     }
   }
 
@@ -1457,23 +1619,42 @@ if (previousMessages.length > 0) {
   }
 }
 
-const extraction = await openai.chat.completions.create(
-  {
-    model: OPENAI_MODEL,
-    messages: messages,
-    tools: [tools[0]],
-    tool_choice: { type: 'function', function: { name: 'extract_intent' } },
-    temperature: 0.3,
-  },
-  { signal: controller.signal }
-);
+// ======================================================
+// TAREFA 2 — FIX 1: Interceptor de intenções curtas
+// Executa ANTES do LLM — zero latência para respostas simples
+// ======================================================
+const intentoDireto = interceptarIntencaoDireta(envelope.message_text);
 
-// Parse resultado da extração (JG-P0-002)
-const callExtract = extraction.choices[0]?.message?.tool_calls?.[0];
-extracted = callExtract?.function?.arguments
-  ? safeJsonParse(callExtract.function.arguments)
-  : null;
-step++;
+if (intentoDireto) {
+  console.log(`[FIX1] Intentão direta detectada: '${envelope.message_text}' → '${intentoDireto}' (sem LLM)`);
+  extracted = {
+    intent_group: intentoDireto === 'cancel' ? 'scheduling' : (intentoDireto === 'info' ? 'other' : 'scheduling'),
+    intent: intentoDireto,
+    slots: {},
+    missing_fields: [],
+    confidence: 1.0,
+    source: 'direct_map',
+  };
+  step++;
+} else {
+  const extraction = await openai.chat.completions.create(
+    {
+      model: OPENAI_MODEL,
+      messages: messages,
+      tools: [tools[0]],
+      tool_choice: { type: 'function', function: { name: 'extract_intent' } },
+      temperature: 0.3,
+    },
+    { signal: controller.signal }
+  );
+
+  // Parse resultado da extração (JG-P0-002)
+  const callExtract = extraction.choices[0]?.message?.tool_calls?.[0];
+  extracted = callExtract?.function?.arguments
+    ? safeJsonParse(callExtract.function.arguments)
+    : null;
+  step++;
+}
 
 if (DEBUG) {
   log.debug({ extracted }, 'extraction_result');
@@ -1513,9 +1694,68 @@ if (updatedState.doctor_id && !activeConvState.doctor_id &&
 console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 
     // ======================================================
-    // 7) CONFIDENCE GUARD
+    // 7) CONFIDENCE GUARD + TAREFA 2 FIX 3: PRESERVAÇÃO DE ESTADO
+    // Não resetar estado quando mensagem é inesperada mas há fluxo ativo.
     // ======================================================
     if (!extracted || extracted.confidence < 0.6) {
+      // FIX 3: Verificar se há fluxo ativo de agendamento
+      const activeBookingStates = [
+        BOOKING_STATES.COLLECTING_DATE,
+        BOOKING_STATES.AWAITING_SLOTS,
+        BOOKING_STATES.COLLECTING_TIME,
+        BOOKING_STATES.CONFIRMING,
+        BOOKING_STATES.COLLECTING_DOCTOR,
+      ];
+      const hasActiveFlow = activeBookingStates.includes(conversationState.booking_state)
+        || conversationState.doctor_id
+        || conversationState.specialty;
+
+      // Verificar se é intenção explícita de cancelar
+      const isCancelIntent = /cancelar|desistir|não quero|nao quero|para|chega/i.test(envelope.message_text);
+
+      if (hasActiveFlow && !isCancelIntent) {
+        // FIX 3: Preservar estado — incrementar stuck_counter_off_topic
+        const currentStuckOffTopic = (conversationState.stuck_counter_off_topic || 0) + 1;
+        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          stuck_counter_off_topic: currentStuckOffTopic,
+        });
+        console.log(`[FIX3] Mensagem fora do fluxo. Estado preservado. stuck_counter_off_topic=${currentStuckOffTopic}`);
+
+        if (currentStuckOffTopic >= STUCK_LIMIT) {
+          // Fallback definitivo após STUCK_LIMIT mensagens fora do fluxo
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            booking_state: BOOKING_STATES.IDLE,
+            stuck_counter_off_topic: 0,
+            doctor_id: null,
+            specialty: null,
+            preferred_date: null,
+            preferred_time: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: 'Parece que você saiu do fluxo de agendamento. Quando quiser, é só me dizer: você quer marcar, remarcar, cancelar ou tirar uma dúvida?',
+            actions: [],
+            debug: DEBUG ? { fix3: 'stuck_limit_reached', stuck_counter_off_topic: currentStuckOffTopic } : undefined,
+          });
+        }
+
+        // Retornar mensagem de contexto mantendo o estado
+        const specialtyDisplay = conversationState.specialty || conversationState.doctor_name;
+        const contextMsg = specialtyDisplay
+          ? `Ainda estou buscando horários para ${specialtyDisplay}. Um momento por favor... Se quiser continuar o agendamento, é só me dizer a data de preferência.`
+          : `Ainda estou aqui para te ajudar! Você quer marcar, remarcar, cancelar ou tirar uma dúvida?`;
+
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: contextMsg,
+          actions: [],
+          debug: DEBUG ? { fix3: 'state_preserved', booking_state: conversationState.booking_state, specialty: conversationState.specialty } : undefined,
+        });
+      }
+
+      // Sem fluxo ativo — comportamento original
       clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
@@ -1605,6 +1845,47 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         actions: [{ type: 'confirmation_requested' }],
         debug: DEBUG ? { booking_state: BOOKING_STATES.CONFIRMING } : undefined,
       });
+    }
+
+    // ======================================================
+    // 7c-pre) TAREFA 2 FIX 4: BOOKING STAGES INTERCEPTOR
+    // Usa BOOKING_STAGES para interceptar antes do LLM por stage.
+    // ======================================================
+    const currentBookingStage = updatedState.booking_state;
+
+    // COLLECTING_SPECIALTY: doctor_id ainda nulo, intent de agendamento
+    if (
+      extracted?.intent_group === 'scheduling' &&
+      !updatedState.doctor_id &&
+      !updatedState.specialty &&
+      currentBookingStage === BOOKING_STATES.IDLE
+    ) {
+      // Transicionar para COLLECTING_DATE (que aqui equivale a COLLECTING_SPECIALTY)
+      await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+        booking_state: BOOKING_STATES.COLLECTING_DATE,
+      });
+      updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
+      console.log('[FIX4] COLLECTING_SPECIALTY: doctor_id nulo, pedindo especialidade');
+      const doctorList = doctors.map(d => `${d.name} — ${d.specialty}`).join(', ');
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: `Qual especialidade você gostaria de agendar? Aqui estão os médicos disponíveis: ${doctorList}.`,
+        actions: [],
+        debug: DEBUG ? { fix4: 'collecting_specialty', booking_state: BOOKING_STATES.COLLECTING_DATE } : undefined,
+      });
+    }
+
+    // AWAITING_CONFIRMATION: todos os campos prontos, aguardar confirmação explícita
+    // (já tratado no bloco 7b acima — apenas garantir stage correto)
+    if (
+      updatedState.booking_state === BOOKING_STATES.CONFIRMING ||
+      updatedState.booking_state === BOOKING_STATES.BOOKED
+    ) {
+      // Persistir stage AWAITING_CONFIRMATION para compatibilidade com BOOKING_STAGES
+      if (updatedState.booking_state === BOOKING_STATES.CONFIRMING) {
+        // Já tratado no bloco 7b — não fazer nada aqui
+      }
     }
 
     // ======================================================

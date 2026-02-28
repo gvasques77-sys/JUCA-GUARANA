@@ -1611,19 +1611,46 @@ extract_intent => {"intent_group":"billing","intent":"procedure_pricing_request"
 let previousMessages = envelope.context?.previous_messages || [];
 
 if (previousMessages.length === 0) {
+  // CORREÇÃO Problema 2: buscar apenas as últimas 10 mensagens (evita timeout por excesso de tokens)
   const { data: historyRows } = await supabase
     .from('conversation_history')
-    .select('role, message_text')
+    .select('role, message_text, created_at')
     .eq('clinic_id', envelope.clinic_id)
     .eq('from_number', envelope.from)
     .order('created_at', { ascending: false })
     .limit(10);
 
   if (historyRows && historyRows.length > 0) {
+    // Inverter para ordem cronológica correta antes de passar ao OpenAI
     previousMessages = historyRows.reverse().map(r => ({
       role: r.role,
       content: r.message_text,
     }));
+  } else {
+    // CORREÇÃO Problema 1: histórico vazio (novo número ou deletado manualmente)
+    // Resetar conversation_state para evitar que contexto antigo persista
+    const currentState = conversationState;
+    const hasStaleState = currentState && (
+      currentState.doctor_id ||
+      currentState.specialty ||
+      currentState.preferred_date ||
+      currentState.preferred_time ||
+      (currentState.booking_state && currentState.booking_state !== 'idle')
+    );
+    if (hasStaleState) {
+      console.log(`[HISTÓRICO] Histórico vazio mas estado antigo detectado — resetando conversation_state para ${envelope.from}`);
+      logDecision('state_reset_on_empty_history', {
+        reason: 'history_empty_stale_state_detected',
+        stale_state: {
+          doctor_id: currentState.doctor_id,
+          specialty: currentState.specialty,
+          booking_state: currentState.booking_state,
+        },
+      }, envelope.clinic_id, envelope.from);
+      await resetConversationState(supabase, envelope.clinic_id, envelope.from);
+      // Recarregar o estado resetado
+      Object.assign(conversationState, await loadConversationState(supabase, envelope.clinic_id, envelope.from));
+    }
   }
 }
 

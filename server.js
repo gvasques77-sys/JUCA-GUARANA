@@ -15,6 +15,13 @@ import { redisHealthCheck } from './services/redisService.js';
 // ======================================================
 // STATE MACHINE — Estados explícitos do fluxo de agendamento
 // ======================================================
+
+// FIX 1 — Constantes para busca aberta (sem data específica)
+const BUSCA_SLOTS_ABERTA_DIAS = 30  // quantos dias à frente buscar
+const BUSCA_SLOTS_ABERTA_MAX  = 5   // quantos slots retornar no máximo
+
+// FIX 3 — Limite de tentativas antes de fallback definitivo
+const STUCK_LIMIT = 3
 const BOOKING_STATES = {
   IDLE: 'idle',
   COLLECTING_DOCTOR: 'collecting_doctor',
@@ -852,14 +859,16 @@ function applyDeterministicInterceptors(state, messageText) {
   }
 
   // REGRA 2: Tem médico, mas não tem data → DEVE buscar próximas datas disponíveis
+  // FIX 1: Quando preferred_date é nulo/vazio, usar busca aberta (a partir de hoje)
+  // Nunca passar null como data — sempre buscar slots a partir de hoje
   if (doctor_id && !preferred_date &&
       booking_state !== BOOKING_STATES.AWAITING_SLOTS &&
       booking_state !== BOOKING_STATES.CONFIRMING &&
       booking_state !== BOOKING_STATES.BOOKED) {
     return {
       tool: 'buscar_proximas_datas',
-      params: { doctor_id, dias: 14 },
-      reason: 'guard_rail: doctor_set_no_date',
+      params: { doctor_id, dias: BUSCA_SLOTS_ABERTA_DIAS, busca_aberta: true },
+      reason: 'guard_rail: doctor_set_no_date (busca_aberta)',
     };
   }
 
@@ -1626,37 +1635,79 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       }, envelope.clinic_id, envelope.from);
 
       if (!validation.valid && validation.noSlots) {
-        // Sem slots → fallback automático para buscar próximas datas
-        console.log('[INTERCEPTOR] No slots found — falling back to buscar_proximas_datas');
-        const fallbackResult = await executeSchedulingTool(
-          'buscar_proximas_datas',
-          { doctor_id: updatedState.doctor_id, dias: 14 },
-          { clinicId: envelope.clinic_id, userPhone: envelope.from }
-        );
-        if (fallbackResult?.success && fallbackResult?.dates?.length > 0) {
+        // FIX 3: Sem slots → incrementar stuck_counter_slots e tentar busca aberta
+        const currentStuckSlots = (updatedState.stuck_counter_slots || 0) + 1;
+        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          stuck_counter_slots: currentStuckSlots,
+        });
+        updatedState.stuck_counter_slots = currentStuckSlots;
+        console.log(`[FIX3] stuck_counter_slots = ${currentStuckSlots}`);
+
+        if (currentStuckSlots >= STUCK_LIMIT) {
+          // Fallback definitivo: resetar estado e encerrar com mensagem clara
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-            last_suggested_dates: fallbackResult.dates,
-            booking_state: BOOKING_STATES.COLLECTING_DATE,
+            booking_state: BOOKING_STATES.IDLE,
+            stuck_counter_slots: 0,
+            preferred_date: null,
+            preferred_date_iso: null,
           });
-          const dateList = fallbackResult.dates.slice(0, 5)
-            .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
           decided = {
             decision_type: 'proceed',
-            message: `Essa data não tem horários disponíveis. As próximas datas com vagas para ${updatedState.doctor_name} são:\n${dateList}\n\nQual dessas datas funciona melhor?`,
+            message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias. Você pode tentar mais tarde ou ligar para a clínica.`,
             actions: [{ type: 'log' }],
             confidence: 1,
           };
           skipSchedulingAgent = true;
           step = MAX_STEPS;
+        } else {
+          // Primeira ou segunda tentativa: tentar busca aberta antes de desistir
+          console.log('[INTERCEPTOR] No slots found — falling back to buscar_proximas_datas (busca_aberta)');
+          const fallbackResult = await executeSchedulingTool(
+            'buscar_proximas_datas',
+            { doctor_id: updatedState.doctor_id, dias: BUSCA_SLOTS_ABERTA_DIAS, busca_aberta: true },
+            { clinicId: envelope.clinic_id, userPhone: envelope.from }
+          );
+          if (fallbackResult?.success && fallbackResult?.dates?.length > 0) {
+            // FIX 3: Resetar stuck_counter ao encontrar slots
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              last_suggested_dates: fallbackResult.dates,
+              booking_state: BOOKING_STATES.COLLECTING_DATE,
+              stuck_counter_slots: 0,
+            });
+            const dateList = fallbackResult.dates.slice(0, BUSCA_SLOTS_ABERTA_MAX)
+              .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
+            decided = {
+              decision_type: 'proceed',
+              message: `Essa data não tem horários disponíveis. As próximas datas com vagas para ${updatedState.doctor_name} são:\n${dateList}\n\nQual dessas datas funciona melhor?`,
+              actions: [{ type: 'log' }],
+              confidence: 1,
+            };
+            skipSchedulingAgent = true;
+            step = MAX_STEPS;
+          } else {
+            // Busca aberta também vazia: aguardar próximo turno (não prometer nada)
+            decided = {
+              decision_type: 'proceed',
+              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name} no momento. Posso verificar novamente em breve.`,
+              actions: [{ type: 'log' }],
+              confidence: 1,
+            };
+            skipSchedulingAgent = true;
+            step = MAX_STEPS;
+          }
         }
       } else if (toolResult?.success) {
         if (forcedCall.tool === 'buscar_proximas_datas' && toolResult?.dates?.length > 0) {
+          // FIX 3: Resetar stuck_counter ao encontrar slots com sucesso
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
             last_suggested_dates: toolResult.dates,
             booking_state: BOOKING_STATES.COLLECTING_DATE,
+            stuck_counter_slots: 0,
           });
-          const dateList = toolResult.dates.slice(0, 5)
+          const dateList = toolResult.dates.slice(0, BUSCA_SLOTS_ABERTA_MAX)
             .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
+          // FIX 3: Injetar slots reais no prompt — o LLM NUNCA deve inventar datas
+          const slotsInjection = `\nSLOTS DISPONÍVEIS REAIS — use APENAS estes, nunca invente outros:\n${dateList}`;
           decided = {
             decision_type: 'proceed',
             message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
@@ -1665,11 +1716,43 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           };
           skipSchedulingAgent = true;
           step = MAX_STEPS;
+        } else if (forcedCall.tool === 'buscar_proximas_datas' && (!toolResult?.dates || toolResult.dates.length === 0)) {
+          // FIX 3: buscar_proximas_datas retornou vazio — incrementar stuck_counter
+          const currentStuckSlots = (updatedState.stuck_counter_slots || 0) + 1;
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            stuck_counter_slots: currentStuckSlots,
+          });
+          updatedState.stuck_counter_slots = currentStuckSlots;
+          console.log(`[FIX3] buscar_proximas_datas vazio, stuck_counter_slots = ${currentStuckSlots}`);
+
+          if (currentStuckSlots >= STUCK_LIMIT) {
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              booking_state: BOOKING_STATES.IDLE,
+              stuck_counter_slots: 0,
+            });
+            decided = {
+              decision_type: 'proceed',
+              message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias. Você pode tentar mais tarde ou ligar para a clínica.`,
+              actions: [{ type: 'log' }],
+              confidence: 1,
+            };
+          } else {
+            decided = {
+              decision_type: 'proceed',
+              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name} no momento. Posso verificar novamente em breve.`,
+              actions: [{ type: 'log' }],
+              confidence: 1,
+            };
+          }
+          skipSchedulingAgent = true;
+          step = MAX_STEPS;
         } else if (forcedCall.tool === 'verificar_disponibilidade') {
           const slots = toolResult.available_slots || toolResult.slots || [];
+          // FIX 3: Resetar stuck_counter ao encontrar slots com sucesso
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
             last_suggested_slots: slots,
             booking_state: BOOKING_STATES.AWAITING_SLOTS,
+            stuck_counter_slots: 0,
           });
           // Deixa o scheduling agent formatar a resposta com os slots
           // Injetar resultado no contexto para o LLM
@@ -1692,7 +1775,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         console.log('[INTERCEPTOR] Availability question detected — forcing buscar_proximas_datas');
         const availResult = await executeSchedulingTool(
           'buscar_proximas_datas',
-          { doctor_id: updatedState.doctor_id, dias: 14 },
+          { doctor_id: updatedState.doctor_id, dias: BUSCA_SLOTS_ABERTA_DIAS, busca_aberta: true },
           { clinicId: envelope.clinic_id, userPhone: envelope.from }
         );
         if (availResult?.success && availResult?.dates?.length > 0) {

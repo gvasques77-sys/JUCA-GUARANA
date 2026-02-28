@@ -19,6 +19,11 @@ const supabase = createClient(
 // CONSTANTES
 // ============================================================
 
+// FIX 2 — Proteção contra recursão infinita em buscarProximasDatasDisponiveis
+const MAX_RECURSION_DEPTH = 3;
+const MAX_SLOTS_RETORNO   = 5;
+const DIAS_BUSCA_FUTURO   = 30;
+
 export const DIAS_SEMANA = {
     0: 'Domingo',
     1: 'Segunda-feira',
@@ -302,7 +307,8 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
 
         if (!schedules || schedules.length === 0) {
             console.log(`[Scheduling] ${doctor.name} não atende ${DIAS_SEMANA[dayOfWeek]}s — buscando próximas datas`);
-            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21);
+            // FIX 2: Usar buscarProximasDatasDisponiveis com profundidade 1 para evitar recursão
+            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21, 1);
             const resultado = {
                 success: true,
                 available_slots: [],
@@ -374,7 +380,8 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
         }
 
         if (availableSlots.length === 0) {
-            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21);
+            // FIX 2: Usar buscarProximasDatasDisponiveis com profundidade 1 para evitar recursão
+            const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 21, 1);
             const resultado = {
                 success: true,
                 available_slots: [],
@@ -430,7 +437,13 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
  * @param {string} doctorId - UUID do médico
  * @param {number} days - quantos dias verificar (padrão 14)
  */
-export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 14) {
+export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 14, profundidade = 0) {
+    // FIX 2: Condição de saída para evitar recursão infinita
+    if (profundidade >= MAX_RECURSION_DEPTH) {
+        console.warn(`[Scheduling] buscarProximasDatasDisponiveis atingiu MAX_RECURSION_DEPTH (${MAX_RECURSION_DEPTH}) — abortando`);
+        return { success: true, message: 'Não encontrei disponibilidade no momento.', dates: [] };
+    }
+
     try {
         const datasDisponiveis = [];
         const hoje = new Date();
@@ -453,7 +466,7 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
                 });
             }
 
-            if (datasDisponiveis.length >= 5) break;
+            if (datasDisponiveis.length >= MAX_SLOTS_RETORNO) break;
         }
 
         if (datasDisponiveis.length === 0) {

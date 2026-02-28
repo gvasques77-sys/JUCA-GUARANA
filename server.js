@@ -705,17 +705,37 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   }
 
   // Médico específico (extract_intent usa 'doctor_preference')
+  // CORREÇÃO 1: Matching robusto com remoção de prefixo Dr/Dra e busca parcial
   const doctorInput = extractedSlots.doctor_name || extractedSlots.doctor_preference;
   if (doctorInput) {
-    const normalizedDoc = doctorInput.toLowerCase();
-    const matchingDoctor = doctors.find(d =>
-      d.name.toLowerCase().includes(normalizedDoc) ||
-      normalizedDoc.includes((d.name.toLowerCase().split(' ')[1]) || '')
-    );
+    // Normalizar: lowercase + remover acentos + remover prefixo Dr/Dra
+    const normalizedDoc = doctorInput
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/^(dr\.?|dra\.?)\s*/i, '') // remove prefixo Dr/Dra
+      .replace(/[^a-z0-9 ]/g, '')
+      .trim();
+    console.log(`[CORREÇÃO1] Buscando médico: '${doctorInput}' → normalizado: '${normalizedDoc}'`);
+    const matchingDoctor = doctors.find(d => {
+      const docNameNorm = d.name
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/^(dr\.?|dra\.?)\s*/i, '') // remove prefixo Dr/Dra do nome no banco
+        .replace(/[^a-z0-9 ]/g, '')
+        .trim();
+      // Busca bidirecional: nome do banco contém input OU input contém parte do nome
+      return docNameNorm.includes(normalizedDoc) || normalizedDoc.includes(docNameNorm) ||
+        // Busca por qualquer token do nome (ex: 'patricia' encontra 'Dra. Patricia Almeida')
+        docNameNorm.split(' ').some(token => token.length > 2 && normalizedDoc.includes(token)) ||
+        normalizedDoc.split(' ').some(token => token.length > 2 && docNameNorm.includes(token));
+    });
     if (matchingDoctor) {
       updates.doctor_name = matchingDoctor.name;
       updates.doctor_id = matchingDoctor.id;
       updates.specialty = matchingDoctor.specialty;
+      console.log(`[CORREÇÃO1] Médico encontrado: '${doctorInput}' → ${matchingDoctor.name} (${matchingDoctor.id})`);
+    } else {
+      console.warn(`[CORREÇÃO1] Médico NÃO encontrado: '${doctorInput}' (normalizado: '${normalizedDoc}'). Disponíveis:`, doctors.map(d => d.name));
     }
   }
 
@@ -1021,10 +1041,12 @@ function applyDeterministicInterceptors(state, messageText) {
   }
 
   // REGRA 2: Tem médico, mas não tem data → DEVE buscar próximas datas disponíveis
-  // FIX 1: Quando preferred_date é nulo/vazio, usar busca aberta (a partir de hoje)
-  // Nunca passar null como data — sempre buscar slots a partir de hoje
+  // CORREÇÃO 2: Adicionar COLLECTING_DATE na lista de estados bloqueados para evitar loop
+  // Quando booking_state já é COLLECTING_DATE, as datas já foram apresentadas ao paciente
+  // e o sistema deve aguardar a escolha do paciente, não buscar novamente.
   if (doctor_id && !preferred_date &&
       booking_state !== BOOKING_STATES.AWAITING_SLOTS &&
+      booking_state !== BOOKING_STATES.COLLECTING_DATE && // CORREÇÃO 2: evita loop após apresentar datas
       booking_state !== BOOKING_STATES.CONFIRMING &&
       booking_state !== BOOKING_STATES.BOOKED) {
     return {
@@ -1053,9 +1075,10 @@ function validateAvailabilityResult(toolResult, tool) {
   if (!toolResult || toolResult.error) {
     return {
       valid: false,
+      // CORREÇÃO 2: Mensagem de fallback não promete busca futura (evita expectativa de loop)
       fallback: tool === 'verificar_disponibilidade'
-        ? 'Não encontrei horários disponíveis nessa data. Vou buscar as próximas datas com vagas.'
-        : 'Não consegui buscar as datas disponíveis no momento.',
+        ? 'Não encontrei horários disponíveis nessa data. Gostaria de tentar outra data ou outro médico?'
+        : 'Não consegui buscar as datas disponíveis no momento. Tente novamente em instantes.',
     };
   }
 
@@ -1065,6 +1088,7 @@ function validateAvailabilityResult(toolResult, tool) {
       return {
         valid: false,
         noSlots: true,
+        // CORREÇÃO 2: Mensagem clara sem prometer busca automática
         fallback: 'Essa data não tem horários disponíveis. Quer que eu busque as próximas datas com vagas?',
       };
     }
@@ -1271,6 +1295,36 @@ Posso confirmar? 😊"
 
 ### REGRA #10: SAUDAÇÃO INICIAL
 Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos e informações. Como posso te ajudar hoje?"
+
+---
+
+## CORREÇÃO 4 — FLUXO DE AGENDAMENTO: SEQUÊNCIA OBRIGATÓRIA
+Para MARCAR uma consulta, colete nesta ordem (pule etapas já respondidas — veja o ESTADO ATUAL acima):
+1. Especialidade ou nome do médico
+2. Data preferida
+3. Horário preferido (se não informado junto com a data)
+4. Nome completo do paciente (se não estiver no histórico)
+5. CONFIRMAR: 'Confirmo consulta com [médico] no dia [data] às [hora]?'
+6. Agendar após confirmação
+
+REGRA CRÍTICA: Se você já tem especialidade + médico (✅ no estado), a PRÓXIMA PERGUNTA DEVE SER sobre data.
+Nunca repita perguntas sobre médico ou especialidade quando já estão preenchidos.
+NUNCA envie a mesma mensagem duas vezes seguidas.
+
+---
+
+## CORREÇÃO 3 — EXTRAÇÃO DE SLOTS: MENSAGENS COMPOSTAS
+IMPORTANTE: O paciente pode enviar múltiplos dados em UMA ÚNICA mensagem.
+Sempre extraia TODOS os dados mencionados, mesmo que sejam especialidade + médico + data ao mesmo tempo.
+
+Exemplos de mensagens compostas que você DEVE extrair completamente:
+- 'quero ana santos dia 1 de março' → doctor='ana santos', date='2026-03-01'
+- 'ginecologista, dra patricia, amanhã de manhã' → specialty='ginecologia', doctor='patricia', date='amanhã', period='manhã'
+- 'marcar com cardiologista pra segunda' → specialty='cardiologia', date='próxima segunda'
+- 'vou escolher ana santos, vou ter amanha e dia 1 de março 2026' → doctor='ana santos', date='amanhã'
+
+Nunca descarte informações que o paciente já forneceu.
+Se o paciente já disse o médico anteriormente no histórico, não pergunte novamente.
 `.trim();
 };
 
@@ -2018,9 +2072,14 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
               confidence: 1,
             };
           } else {
+            // CORREÇÃO 2: Avançar booking_state para COLLECTING_DATE para evitar
+            // que o interceptor dispare novamente na próxima mensagem (loop)
+            await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+              booking_state: BOOKING_STATES.COLLECTING_DATE,
+            });
             decided = {
               decision_type: 'proceed',
-              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name} no momento. Posso verificar novamente em breve.`,
+              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name || updatedState.specialty || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias. Gostaria de escolher outro médico ou especialidade?`,
               actions: [{ type: 'log' }],
               confidence: 1,
             };
@@ -2039,6 +2098,11 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           // Injetar resultado no contexto para o LLM
         }
       } else if (!validation.valid) {
+        // CORREÇÃO 2: Avançar booking_state para COLLECTING_DATE para evitar
+        // que o interceptor dispare novamente na próxima mensagem (loop)
+        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          booking_state: BOOKING_STATES.COLLECTING_DATE,
+        });
         decided = {
           decision_type: 'proceed',
           message: validation.fallback,

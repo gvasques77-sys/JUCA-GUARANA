@@ -68,6 +68,17 @@ function interceptarIntencaoDireta(text) {
 }
 
 // ======================================================
+// CAMADA 1: Helper para mapear intent → intent_group
+// ======================================================
+function resolveIntentGroup(intent) {
+  const SCHEDULING_INTENTS = ['schedule_new', 'view_appointments', 'try_other_date', 'try_other_doctor', 'confirm_yes', 'confirm_no'];
+  const HANDOFF_INTENTS    = ['human_handoff'];
+  if (SCHEDULING_INTENTS.includes(intent)) return 'scheduling';
+  if (HANDOFF_INTENTS.includes(intent))    return 'other';
+  return 'other';
+}
+
+// ======================================================
 // TAREFA 2 — FIX 3: Constante de timeout de sessão
 // ======================================================
 const SESSION_TIMEOUT_MINUTES = 30
@@ -150,6 +161,7 @@ const EnvelopeSchema = z.object({
   message_text: z.string().min(1),
   phone_number_id: z.string().optional(),
   received_at_iso: z.string().optional(),
+  intent_override: z.string().optional(), // CAMADA 1: intent pré-classificada por botão interativo
   context: z
     .object({
       previous_messages: z
@@ -1794,6 +1806,27 @@ if (previousMessages.length === 0) {
       // Recarregar o estado resetado
       Object.assign(conversationState, await loadConversationState(supabase, envelope.clinic_id, envelope.from));
     }
+
+    // CAMADA 2 — Cenário A: Primeira mensagem → retornar saudão com botões interativos
+    const isFirstMessage = true;
+    if (isFirstMessage) {
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: 'Olá! Sou a Juca, secretária virtual da clínica. Como posso te ajudar?',
+        actions: [{
+          type: 'send_interactive_buttons',
+          payload: {
+            buttons: [
+              { id: 'schedule_new',      title: '\uD83D\uDCC5 Agendar consulta' },
+              { id: 'view_appointments', title: '\uD83D\uDCCB Ver minha consulta' },
+              { id: 'human_handoff',     title: '\uD83D\uDCAC Falar com atendente' },
+            ],
+          },
+        }],
+        debug: DEBUG ? { source: 'camada2_greeting' } : undefined,
+      });
+    }
   }
 }
 
@@ -1841,6 +1874,23 @@ if (previousMessages.length > 0) {
       running_summary: activeConvState.running_summary,
     });
   }
+}
+
+// ======================================================
+// CAMADA 1: Se chegou intent_override de botão → pular extract_intent
+// Isso elimina 1 chamada ao LLM e garante classificação 100% precisa
+// ======================================================
+if (envelope.intent_override) {
+  console.log(`[INTENT_OVERRIDE] Intent pré-classificada por botão: ${envelope.intent_override}`);
+  extracted = {
+    intent_group: resolveIntentGroup(envelope.intent_override),
+    intent: envelope.intent_override,
+    slots: {},
+    missing_fields: [],
+    confidence: 1.0,
+    source: 'button_override',
+  };
+  step = 1; // pular o step de extract_intent
 }
 
 // ======================================================
@@ -2006,7 +2056,40 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         booking_state: BOOKING_STATES.CONFIRMING,
       }, envelope.clinic_id, envelope.from);
 
-      if (/^sim|^s$|confirmar|^ok$|^yes/.test(userSaidConfirmation)) {
+      // CAMADA 1: Botão de confirmação tem prioridade sobre regex
+      if (envelope.intent_override === 'confirm_yes') {
+        // Ir direto para BOOKED
+        const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          booking_state: BOOKING_STATES.BOOKED,
+        });
+        Object.assign(updatedState, newState);
+        logDecision('state_transition', {
+          from: BOOKING_STATES.CONFIRMING,
+          to: BOOKING_STATES.BOOKED,
+          trigger: 'button_confirm_yes',
+        }, envelope.clinic_id, envelope.from);
+        // Continua o flow — scheduling agent vai chamar criar_agendamento
+      } else if (envelope.intent_override === 'confirm_no') {
+        // Ir direto para IDLE + cancelar
+        const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          booking_state: BOOKING_STATES.IDLE,
+          preferred_date: null,
+          preferred_date_iso: null,
+          preferred_time: null,
+        });
+        logDecision('state_transition', {
+          from: BOOKING_STATES.CONFIRMING,
+          to: BOOKING_STATES.IDLE,
+          trigger: 'button_confirm_no',
+        }, envelope.clinic_id, envelope.from);
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊',
+          actions: [],
+          debug: DEBUG ? { state: newState } : undefined,
+        });
+      } else if (/^sim|^s$|confirmar|^ok$|^yes/.test(userSaidConfirmation)) {
         // Usuário confirmou → avançar para BOOKED e deixar scheduling agent criar
         const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
           booking_state: BOOKING_STATES.BOOKED,
@@ -2068,7 +2151,16 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       return res.json({
         correlation_id: envelope.correlation_id,
         final_message: buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name),
-        actions: [{ type: 'confirmation_requested' }],
+        // CAMADA 2 — Cenário B: Botões de confirmação interativos
+        actions: [{
+          type: 'send_interactive_buttons',
+          payload: {
+            buttons: [
+              { id: 'confirm_yes', title: '\u2705 Confirmar' },
+              { id: 'confirm_no',  title: '\u274C Cancelar' },
+            ],
+          },
+        }],
         debug: DEBUG ? { booking_state: BOOKING_STATES.CONFIRMING } : undefined,
       });
     }
@@ -2160,8 +2252,18 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           });
           decided = {
             decision_type: 'proceed',
-            message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias. Você pode tentar mais tarde ou ligar para a clínica.`,
-            actions: [{ type: 'log' }],
+            message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias.`,
+            // CAMADA 2 — Cenário C: Botões de alternativa quando sem disponibilidade
+            actions: [{
+              type: 'send_interactive_buttons',
+              payload: {
+                buttons: [
+                  { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
+                  { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
+                  { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                ],
+              },
+            }],
             confidence: 1,
           };
           skipSchedulingAgent = true;
@@ -2195,8 +2297,18 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             // Busca aberta também vazia: aguardar próximo turno (não prometer nada)
             decided = {
               decision_type: 'proceed',
-              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name} no momento. Posso verificar novamente em breve.`,
-              actions: [{ type: 'log' }],
+              message: `Não encontrei horários disponíveis para ${updatedState.doctor_name} no momento.`,
+              // CAMADA 2 — Cenário C: Botões de alternativa
+              actions: [{
+                type: 'send_interactive_buttons',
+                payload: {
+                  buttons: [
+                    { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
+                    { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
+                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                  ],
+                },
+              }],
               confidence: 1,
             };
             skipSchedulingAgent = true;
@@ -2239,8 +2351,18 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             });
             decided = {
               decision_type: 'proceed',
-              message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias. Você pode tentar mais tarde ou ligar para a clínica.`,
-              actions: [{ type: 'log' }],
+              message: `Não encontrei vagas disponíveis para ${updatedState.specialty || updatedState.doctor_name || 'o médico solicitado'} nos próximos ${BUSCA_SLOTS_ABERTA_DIAS} dias.`,
+              // CAMADA 2 — Cenário C: Botões de alternativa (stuck_limit)
+              actions: [{
+                type: 'send_interactive_buttons',
+                payload: {
+                  buttons: [
+                    { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
+                    { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
+                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                  ],
+                },
+              }],
               confidence: 1,
             };
           } else {

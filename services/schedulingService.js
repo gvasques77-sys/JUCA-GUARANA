@@ -431,6 +431,137 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
     }
 }
 
+
+// Mapeamento de nomes de dias da semana em inglês para número (0=domingo, 1=segunda...)
+const WEEKDAY_NAME_MAP = {
+    'sunday': 0,
+    'monday': 1,
+    'tuesday': 2,
+    'wednesday': 3,
+    'thursday': 4,
+    'friday': 5,
+    'saturday': 6,
+};
+
+/**
+ * BUG 4 FIX: Verifica disponibilidade de um médico por dia da semana.
+ * Busca as próximas ocorrências do dia da semana especificado.
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} doctorId - UUID do médico
+ * @param {string} weekday - dia da semana em inglês ("friday", "monday", etc.)
+ * @param {number} weeksAhead - quantas semanas à frente buscar (padrão: 2)
+ */
+export async function verificarDisponibilidadePorDiaSemana(clinicId, doctorId, weekday, weeksAhead = 2) {
+    try {
+        const targetDay = WEEKDAY_NAME_MAP[weekday?.toLowerCase()];
+        if (targetDay === undefined) {
+            return {
+                success: false,
+                message: `Dia da semana inválido: "${weekday}". Use: monday, tuesday, wednesday, thursday, friday, saturday.`
+            };
+        }
+
+        // Buscar médico
+        const { data: doctor, error: doctorError } = await supabase
+            .from('doctors')
+            .select('id, name, specialty')
+            .eq('id', doctorId)
+            .eq('clinic_id', clinicId)
+            .single();
+
+        if (doctorError || !doctor) {
+            return { success: false, message: 'Médico não encontrado.' };
+        }
+
+        const DIAS_SEMANA_PT = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const dayNamePt = DIAS_SEMANA_PT[targetDay];
+
+        const datasDisponiveis = [];
+        const hoje = new Date();
+        hoje.setHours(0, 0, 0, 0);
+
+        // Buscar as próximas ocorrências do dia da semana
+        const maxDays = weeksAhead * 7 + 7; // margem extra
+        for (let i = 1; i <= maxDays; i++) {
+            const data = new Date(hoje);
+            data.setDate(data.getDate() + i);
+
+            if (data.getDay() !== targetDay) continue;
+
+            const dateStr = data.toISOString().split('T')[0];
+            const slots = await verificarDisponibilidadeSimples(clinicId, doctorId, dateStr);
+
+            if (slots.length > 0) {
+                datasDisponiveis.push({
+                    date: dateStr,
+                    date_iso: dateStr,
+                    formatted_date: formatDate(dateStr),
+                    day_of_week: DIAS_SEMANA[data.getDay()],
+                    slots_count: slots.length,
+                    available_slots: slots,
+                });
+            }
+
+            if (datasDisponiveis.length >= MAX_SLOTS_RETORNO) break;
+        }
+
+        if (datasDisponiveis.length === 0) {
+            return {
+                success: true,
+                available_slots: [],
+                doctor: doctor,
+                weekday: weekday,
+                message: `${doctor.name} não tem horários disponíveis nas próximas ${weeksAhead} semanas nas ${dayNamePt}s. Gostaria de tentar outro dia?`
+            };
+        }
+
+        // Se encontrou apenas uma data, retornar os slots diretamente
+        if (datasDisponiveis.length === 1) {
+            const d = datasDisponiveis[0];
+            const manha = d.available_slots.filter(s => parseInt(s.split(':')[0]) < 12);
+            const tarde = d.available_slots.filter(s => { const h = parseInt(s.split(':')[0]); return h >= 12 && h < 18; });
+            const noite = d.available_slots.filter(s => parseInt(s.split(':')[0]) >= 18);
+
+            let mensagem = `Encontrei horários para ${doctor.name} na ${dayNamePt}:\n`;
+            mensagem += `${d.day_of_week}, ${d.formatted_date}\n\n`;
+            if (manha.length > 0) mensagem += `Manha: ${manha.join(', ')}\n`;
+            if (tarde.length > 0) mensagem += `Tarde: ${tarde.join(', ')}\n`;
+            if (noite.length > 0) mensagem += `Noite: ${noite.join(', ')}\n`;
+            mensagem += `\nQual horário você prefere?`;
+
+            return {
+                success: true,
+                message: mensagem,
+                available_slots: d.available_slots,
+                doctor: doctor,
+                date: d.date,
+                dates: datasDisponiveis,
+                weekday: weekday,
+            };
+        }
+
+        // Múltiplas datas encontradas
+        let mensagem = `Encontrei as seguintes ${dayNamePt}s disponíveis para ${doctor.name}:\n\n`;
+        datasDisponiveis.forEach((d, idx) => {
+            mensagem += `${idx + 1}. ${d.day_of_week}, ${d.formatted_date} — ${d.slots_count} horários\n`;
+        });
+        mensagem += `\nQual data você prefere?`;
+
+        return {
+            success: true,
+            message: mensagem,
+            dates: datasDisponiveis,
+            doctor: doctor,
+            weekday: weekday,
+        };
+
+    } catch (error) {
+        console.error('[BUG4-FIX] Erro ao verificar disponibilidade por dia da semana:', error);
+        return { success: false, message: 'Erro ao verificar disponibilidade.', error: error.message };
+    }
+}
+
+
 /**
  * Busca próximas datas disponíveis para um médico
  * @param {string} clinicId - UUID da clínica

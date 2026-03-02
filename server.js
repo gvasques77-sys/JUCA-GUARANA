@@ -740,6 +740,7 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   }
 
   // Data (extract_intent usa 'preferred_date_text')
+  // BUG 2 FIX: Resolver datas relativas (incluindo dias da semana) ANTES de salvar no estado
   const dateInput = extractedSlots.preferred_date_text || extractedSlots.preferred_date;
   if (dateInput) {
     // Tentar resolver para ISO (YYYY-MM-DD) antes de salvar
@@ -751,12 +752,21 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
     if (resolvedDate) {
       updates.preferred_date = resolvedDate;
       updates.preferred_date_iso = resolvedDate;
-      console.log(`[STATE] Data resolvida: "${dateInput}" → ${resolvedDate}`);
+      console.log(`[BUG2-FIX] Data resolvida: "${dateInput}" → ${resolvedDate}`);
     } else {
-      // Manter texto original — LLM vai tentar interpretar depois
-      updates.preferred_date = dateInput;
-      if (extractedSlots.preferred_date_iso) {
-        updates.preferred_date_iso = extractedSlots.preferred_date_iso;
+      // Tentar resolver como data ISO direta (YYYY-MM-DD)
+      const isoPattern = /^\d{4}-\d{2}-\d{2}$/;
+      if (isoPattern.test(dateInput)) {
+        updates.preferred_date = dateInput;
+        updates.preferred_date_iso = dateInput;
+        console.log(`[BUG2-FIX] Data ISO direta: "${dateInput}"`);
+      } else {
+        // Manter texto original — LLM vai tentar interpretar depois
+        updates.preferred_date = dateInput;
+        if (extractedSlots.preferred_date_iso) {
+          updates.preferred_date_iso = extractedSlots.preferred_date_iso;
+        }
+        console.log(`[BUG2-FIX] Data não resolvida, mantendo texto: "${dateInput}"`);
       }
     }
   }
@@ -932,17 +942,22 @@ function resolveDateChoice(userInput, suggestedDates = [], referenceDate = new D
   if (/amanha/.test(input)) return formatISO(addDays(referenceDate, 1));
   if (/semana que vem|proxima semana/.test(input)) return formatISO(addDays(referenceDate, 7));
 
-  // Dias da semana: próxima ocorrência
+  // Dias da semana: próxima ocorrência (BUG 2 FIX: suporte expandido a variações)
   const WEEKDAY_MAP = [
-    { pattern: /segunda/, day: 1 },
-    { pattern: /terca|terça/, day: 2 },
-    { pattern: /quarta/, day: 3 },
-    { pattern: /quinta/, day: 4 },
-    { pattern: /sexta/, day: 5 },
-    { pattern: /sabado|sábado/, day: 6 },
+    { pattern: /\bsegunda([-\s]feira)?\b/, day: 1 },
+    { pattern: /\b(terca|terça)([-\s]feira)?\b/, day: 2 },
+    { pattern: /\bquarta([-\s]feira)?\b/, day: 3 },
+    { pattern: /\bquinta([-\s]feira)?\b/, day: 4 },
+    { pattern: /\bsexta([-\s]feira)?\b/, day: 5 },
+    { pattern: /\b(sabado|sábado)\b/, day: 6 },
+    { pattern: /\bdomingo\b/, day: 0 },
   ];
   for (const { pattern, day } of WEEKDAY_MAP) {
-    if (pattern.test(input)) return formatISO(nextWeekday(referenceDate, day));
+    if (pattern.test(input)) {
+      const resolved = formatISO(nextWeekday(referenceDate, day));
+      console.log(`[resolveDateChoice] Dia da semana detectado: '${userInput}' → ${resolved}`);
+      return resolved;
+    }
   }
 
   // Dia do mês: "dia 15", "15/03", "15 de março"
@@ -1311,6 +1326,26 @@ Posso confirmar? 😊"
 ### REGRA #10: SAUDAÇÃO INICIAL
 Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos e informações. Como posso te ajudar hoje?"
 
+### REGRA #11: NORMALIZAÇÃO DE DATA EM LINGUAGEM NATURAL (BUG 2 FIX)
+Quando o usuário mencionar um dia da semana (ex: "sexta", "segunda-feira", "quinta"), você DEVE:
+1. Calcular a data exata da PRÓXIMA ocorrência desse dia a partir de hoje
+2. Converter para YYYY-MM-DD ANTES de chamar verificar_disponibilidade ou buscar_proximas_datas
+3. NUNCA pedir ao usuário para confirmar a data numérica se ele já informou o dia da semana
+4. Exemplos de conversão obrigatória:
+   - "sexta feira" → calcular próxima sexta = YYYY-MM-DD exato
+   - "segunda" → calcular próxima segunda = YYYY-MM-DD exato
+   - "semana que vem" → hoje + 7 dias
+   - "amanhã" → hoje + 1 dia
+   - "essa semana" → buscar_proximas_datas com dias_ahead=7
+
+### REGRA #12: LIMITE DE TENTATIVAS DE DISPONIBILIDADE (BUG 3 FIX)
+Se verificar_disponibilidade retornar vazio ou erro:
+1. Tente NO MÁXIMO 1 vez com parâmetros diferentes (ex: buscar_proximas_datas)
+2. Após 2 tentativas sem resultado, informe o usuário UMA ÚNICA VEZ e peça nova preferência
+3. NUNCA envie a mesma mensagem de "não encontrei horários" duas vezes seguidas sem ter feito nova busca
+4. Se buscar_proximas_datas também não retornar resultados, informe UMA ÚNICA VEZ que não há vagas disponíveis
+5. PROIBIDO: chamar a mesma tool mais de 2 vezes no mesmo ciclo de resposta
+
 ---
 
 ## CORREÇÃO 4 — FLUXO DE AGENDAMENTO: SEQUÊNCIA OBRIGATÓRIA
@@ -1411,6 +1446,45 @@ app.post('/process', checkAgentAuth, async (req, res) => {
   const timeoutId = setTimeout(() => controller.abort(), GLOBAL_TIMEOUT_MS);
 
   try {
+    // ======================================================
+    // BUG 1 FIX: COOLDOWN DE SESSÃO (deduplication por janela de tempo)
+    // Verificar se já houve resposta nos últimos 10 segundos para este
+    // phone_number + clinic_id. Se sim, enfileirar/ignorar para evitar
+    // mensagem de boas-vindas duplicada.
+    // ======================================================
+    const COOLDOWN_WINDOW_MS = Number(process.env.SESSION_COOLDOWN_MS || 10000); // 10 segundos
+    try {
+      const { data: lastResponse } = await supabase
+        .from('conversation_history')
+        .select('created_at')
+        .eq('clinic_id', envelope.clinic_id)
+        .eq('from_number', envelope.from)
+        .eq('role', 'assistant')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastResponse?.created_at) {
+        const lastResponseTime = new Date(lastResponse.created_at).getTime();
+        const elapsed = Date.now() - lastResponseTime;
+        if (elapsed < COOLDOWN_WINDOW_MS) {
+          console.log(`[BUG1-FIX] Cooldown ativo para ${envelope.from}: última resposta há ${elapsed}ms (< ${COOLDOWN_WINDOW_MS}ms). Aguardando...`);
+          // Não retornar erro — retornar sinal para o Worker n8n agregar a mensagem
+          // ao contexto sem disparar nova resposta imediata
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: null, // sinal: não enviar ao WhatsApp
+            actions: [{ type: 'cooldown_active', payload: { elapsed_ms: elapsed, cooldown_ms: COOLDOWN_WINDOW_MS } }],
+            debug: DEBUG ? { cooldown: true, elapsed_ms: elapsed } : undefined,
+          });
+        }
+      }
+    } catch (cooldownErr) {
+      // Silencioso: não bloquear o fluxo por erro no cooldown
+      log.warn({ err: String(cooldownErr) }, '[BUG1-FIX] Erro no cooldown check — continuando normalmente');
+    }
+
     // ======================================================
     // 2) BUSCAR CONFIGURAÇÕES DA CLÍNICA
     // ======================================================
@@ -2428,6 +2502,50 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
         last_question_asked: lastQuestion,
       });
+    }
+
+    // ======================================================
+    // 10c) BUG 3 FIX: CONTROLE DE ENVIO DUPLICADO
+    // Verificar se a mesma mensagem já foi enviada nos últimos 30 segundos
+    // para este número. Se sim, bloquear envio duplicado.
+    // ======================================================
+    try {
+      const DEDUP_WINDOW_MS = 30 * 1000; // 30 segundos
+      const { data: recentMessages } = await supabase
+        .from('conversation_history')
+        .select('message_text, created_at')
+        .eq('clinic_id', envelope.clinic_id)
+        .eq('from_number', envelope.from)
+        .eq('role', 'assistant')
+        .gte('created_at', new Date(Date.now() - DEDUP_WINDOW_MS).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+      if (recentMessages && recentMessages.length > 0) {
+        const isDuplicate = recentMessages.some(msg => {
+          // Normalizar para comparação (remover espaços extras e emojis)
+          const normalize = (s) => s.replace(/\s+/g, ' ').trim().substring(0, 100);
+          return normalize(msg.message_text) === normalize(finalMessage);
+        });
+
+        if (isDuplicate) {
+          log.warn({
+            from: envelope.from,
+            clinic_id: envelope.clinic_id,
+            msg_preview: finalMessage.substring(0, 80),
+          }, '[BUG3-FIX] Mensagem duplicada detectada nos últimos 30s — bloqueando envio');
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: null, // sinal para o Worker n8n não enviar
+            actions: [{ type: 'dedup_blocked', payload: { reason: 'duplicate_within_30s' } }],
+            debug: DEBUG ? { dedup: true, blocked_message: finalMessage.substring(0, 80) } : undefined,
+          });
+        }
+      }
+    } catch (dedupErr) {
+      // Silencioso: não bloquear o fluxo por erro na dedup
+      log.warn({ err: String(dedupErr) }, '[BUG3-FIX] Erro na verificação de dedup — continuando');
     }
 
     // ======================================================

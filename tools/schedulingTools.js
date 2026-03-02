@@ -51,7 +51,12 @@ export const schedulingToolsDefinitions = [
         function: {
             name: 'verificar_disponibilidade',
             strict: false,
-            description: 'Verifica horários disponíveis de um médico em uma data específica.',
+            // BUG 4 FIX: Suporte a 3 modos de operação
+            description: 'Verifica horários disponíveis de um médico. Suporta 3 modos:\n' +
+                '1) Data específica: use campo "data" (YYYY-MM-DD)\n' +
+                '2) Próximas disponibilidades: use "find_next: true" com "days_ahead" (padrão 14)\n' +
+                '3) Por dia da semana: use "weekday" ("monday","tuesday","wednesday","thursday","friday","saturday") com "weeks_ahead" (padrão 2)\n' +
+                'Use modo 2 ou 3 quando o paciente perguntar "que dia tem vaga?" ou "prefiro sexta".',
             parameters: {
                 type: 'object',
                 properties: {
@@ -61,10 +66,27 @@ export const schedulingToolsDefinitions = [
                     },
                     data: {
                         type: 'string',
-                        description: 'Data no formato YYYY-MM-DD (ex: "2025-02-25")'
+                        description: 'Data no formato YYYY-MM-DD (ex: "2025-02-25"). Usar no Modo 1.'
+                    },
+                    find_next: {
+                        type: 'boolean',
+                        description: 'Se true, busca as próximas datas disponíveis (Modo 2). Não requer "data".'
+                    },
+                    days_ahead: {
+                        type: 'number',
+                        description: 'Quantos dias à frente buscar no Modo 2 (padrão: 14)'
+                    },
+                    weekday: {
+                        type: 'string',
+                        enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+                        description: 'Dia da semana para buscar (Modo 3). Ex: "friday" para sexta-feira.'
+                    },
+                    weeks_ahead: {
+                        type: 'number',
+                        description: 'Quantas semanas à frente buscar no Modo 3 (padrão: 2)'
                     }
                 },
-                required: ['doctor_id', 'data']
+                required: ['doctor_id']
             }
         }
     },
@@ -214,7 +236,38 @@ export async function executeSchedulingTool(toolName, args, context = {}) {
                 return await schedulingService.listarServicos(clinicId, args.doctor_id);
 
             case 'verificar_disponibilidade':
-                return await schedulingService.verificarDisponibilidade(clinicId, args.doctor_id, args.data);
+                // BUG 4 FIX: Suporte a 3 modos de operação
+                if (args.find_next === true) {
+                    // Modo 2: Próximas disponibilidades
+                    console.log(`[BUG4-FIX] Modo 2 (find_next): buscando próximas ${args.days_ahead || 14} datas`);
+                    return await schedulingService.buscarProximasDatasDisponiveis(
+                        clinicId,
+                        args.doctor_id,
+                        args.days_ahead || 14,
+                        0,
+                        null
+                    );
+                } else if (args.weekday) {
+                    // Modo 3: Por dia da semana
+                    console.log(`[BUG4-FIX] Modo 3 (weekday): buscando ${args.weekday} nas próximas ${args.weeks_ahead || 2} semanas`);
+                    return await schedulingService.verificarDisponibilidadePorDiaSemana(
+                        clinicId,
+                        args.doctor_id,
+                        args.weekday,
+                        args.weeks_ahead || 2
+                    );
+                } else {
+                    // Modo 1: Data específica (comportamento original)
+                    if (!args.data) {
+                        console.warn('[BUG4-FIX] verificar_disponibilidade chamada sem data, find_next ou weekday — retornando erro claro');
+                        return {
+                            success: false,
+                            error: 'data_required',
+                            message: 'Para verificar disponibilidade, informe: (1) uma data específica em YYYY-MM-DD, (2) find_next=true para próximas datas, ou (3) weekday com o dia da semana preferido.'
+                        };
+                    }
+                    return await schedulingService.verificarDisponibilidade(clinicId, args.doctor_id, args.data);
+                }
 
             case 'buscar_proximas_datas':
                 // FIX-FALLBACK: Suporte a data_inicio para buscar a partir de uma data específica

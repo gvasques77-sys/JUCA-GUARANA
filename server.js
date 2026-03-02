@@ -1088,8 +1088,10 @@ function validateAvailabilityResult(toolResult, tool) {
       return {
         valid: false,
         noSlots: true,
-        // CORREÇÃO 2: Mensagem clara sem prometer busca automática
-        fallback: 'Essa data não tem horários disponíveis. Quer que eu busque as próximas datas com vagas?',
+        // FIX-FALLBACK: Busca automática de alternativas será executada no bloco de tool execution
+        fallback: 'Não há vagas nessa data. Buscando as próximas datas disponíveis...',
+        // Preservar a data solicitada para usar como ponto de partida da busca alternativa
+        requestedDate: toolResult.date || null,
       };
     }
   }
@@ -1261,6 +1263,19 @@ Se o paciente escolher uma data específica:
 - CHAME verificar_disponibilidade e liste apenas os horários retornados.
 Se não houver horários na data pedida:
 - Informe e ofereça as próximas datas (chame buscar_proximas_datas).
+
+### REGRAS DE BUSCA DE DISPONIBILIDADE (ANTI-LOOP OBRIGATÓRIO)
+
+1. Quando não encontrar horários na data solicitada, DEVE imediatamente executar nova busca
+   para os próximos 14 dias a partir daquela data.
+
+2. NUNCA repita a mesma mensagem de "não encontrei" duas vezes sem ter feito nova busca
+   com intervalo maior.
+
+3. Sempre que a busca específica falhar, apresente as próximas 3 datas disponíveis:
+   "Não há vagas no dia X, mas encontrei em: [data 1], [data 2], [data 3]. Qual prefere?"
+
+4. Só informe que não há vagas se a busca de 14 dias também não retornar resultados.
 
 ### REGRA #4: MEMÓRIA DE OPÇÕES APRESENTADAS
 Se o paciente responder "a primeira", "a segunda", "de manhã", "o primeiro horário":
@@ -2317,11 +2332,20 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             }, envelope.clinic_id, envelope.from);
 
             if (!valResult.valid && valResult.noSlots && toolCall.function.name === 'verificar_disponibilidade') {
-              // Sem slots nessa data → fallback automático
-              console.log('[TOOL] No slots — auto-fallback to buscar_proximas_datas');
+              // FIX-FALLBACK: Sem slots nessa data → buscar a partir da data solicitada (não de hoje)
+              const dataSolicitada = valResult.requestedDate || updatedState.preferred_date || null;
+              console.log(`[TOOL] No slots em ${dataSolicitada} — auto-fallback to buscar_proximas_datas a partir de ${dataSolicitada}`);
+              const fallbackArgs = {
+                doctor_id: updatedState.doctor_id,
+                dias: 14,
+              };
+              // Passar dataInicio para buscar a partir da data solicitada, não de hoje
+              if (dataSolicitada) {
+                fallbackArgs.data_inicio = dataSolicitada;
+              }
               const fallbackRes = await executeSchedulingTool(
                 'buscar_proximas_datas',
-                { doctor_id: updatedState.doctor_id, dias: 14 },
+                fallbackArgs,
                 { clinicId: envelope.clinic_id, userPhone: envelope.from }
               );
               // Injetar resultado do fallback como resposta da tool

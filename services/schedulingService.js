@@ -436,8 +436,10 @@ export async function verificarDisponibilidade(clinicId, doctorId, date) {
  * @param {string} clinicId - UUID da clínica
  * @param {string} doctorId - UUID do médico
  * @param {number} days - quantos dias verificar (padrão 14)
+ * @param {number} profundidade - controle de recursão (uso interno)
+ * @param {string|null} dataInicio - data de início da busca no formato YYYY-MM-DD (padrão: hoje)
  */
-export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 14, profundidade = 0) {
+export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 14, profundidade = 0, dataInicio = null) {
     // FIX 2: Condição de saída para evitar recursão infinita
     if (profundidade >= MAX_RECURSION_DEPTH) {
         console.warn(`[Scheduling] buscarProximasDatasDisponiveis atingiu MAX_RECURSION_DEPTH (${MAX_RECURSION_DEPTH}) — abortando`);
@@ -446,10 +448,11 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
 
     try {
         const datasDisponiveis = [];
-        const hoje = new Date();
+        // Se dataInicio for fornecida, buscar a partir dela; senão, a partir de hoje
+        const baseDate = dataInicio ? new Date(dataInicio + 'T12:00:00') : new Date();
 
-        for (let i = 1; i <= days; i++) {   // começa em 1 (amanhã)
-            const data = new Date(hoje);
+        for (let i = 1; i <= days; i++) {   // começa em 1 (dia seguinte à baseDate)
+            const data = new Date(baseDate);
             data.setDate(data.getDate() + i);
             const dateStr = data.toISOString().split('T')[0];
 

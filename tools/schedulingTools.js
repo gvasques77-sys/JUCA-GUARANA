@@ -217,7 +217,14 @@ export async function executeSchedulingTool(toolName, args, context = {}) {
                 return await schedulingService.verificarDisponibilidade(clinicId, args.doctor_id, args.data);
 
             case 'buscar_proximas_datas':
-                return await schedulingService.buscarProximasDatasDisponiveis(clinicId, args.doctor_id, args.dias || 14);
+                // FIX-FALLBACK: Suporte a data_inicio para buscar a partir de uma data específica
+                return await schedulingService.buscarProximasDatasDisponiveis(
+                    clinicId,
+                    args.doctor_id,
+                    args.dias || 14,
+                    0,                    // profundidade inicial
+                    args.data_inicio || null  // data de início da busca (null = hoje)
+                );
 
             case 'criar_agendamento':
                 return await schedulingService.criarAgendamento({

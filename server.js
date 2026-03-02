@@ -668,7 +668,7 @@ async function normalizeSpecialtyWithFallback(input, supabaseClient, clinicId) {
  * Valida especialidade e médico contra dados reais da clínica.
  * Suporta os dois naming conventions do extract_intent.
  */
-function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
+async function mergeExtractedSlots(currentState, extractedSlots, doctors, services, supabaseClient, clinicId) {
   const updates = { ...currentState };
 
   // Nome do paciente
@@ -680,8 +680,11 @@ function mergeExtractedSlots(currentState, extractedSlots, doctors, services) {
   // TAREFA 2 FIX 2: Usar normalizeSpecialty expandido + persistir em specialty
   const specialtyInput = extractedSlots.specialty || extractedSlots.specialty_or_reason;
   if (specialtyInput) {
-    const normalizedSpec = normalizeSpecialty(specialtyInput);
-    console.log(`[FIX2] Especialidade normalizada: '${specialtyInput}' → '${normalizedSpec}'`);
+    // Usar versão com fallback no banco para especialidades não mapeadas
+    const normalizedSpec = supabaseClient && clinicId
+      ? await normalizeSpecialtyWithFallback(specialtyInput, supabaseClient, clinicId)
+      : normalizeSpecialty(specialtyInput);
+    console.log(`[FIX2] Especialidade normalizada (com fallback): '${specialtyInput}' → '${normalizedSpec}'`);
     const matchingDoctor = doctors.find(d => {
       const docSpec = d.specialty.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -1046,13 +1049,24 @@ function resolveTimeChoice(userInput, suggestedSlots = []) {
 function applyDeterministicInterceptors(state, messageText) {
   const { doctor_id, preferred_date, preferred_time, booking_state } = state;
 
-  // REGRA 1: Tem médico e data, mas não tem horário → DEVE verificar disponibilidade
-  if (doctor_id && preferred_date && !preferred_time && booking_state !== BOOKING_STATES.AWAITING_SLOTS) {
+  // REGRA 1: Tem médico e data ISO válida, mas não tem horário → DEVE verificar disponibilidade
+  // Guard: verificar se preferred_date é realmente um ISO (YYYY-MM-DD) antes de chamar a tool
+  // Se for texto como "a primeira" ou "sexta", não passar para a tool (causaria DATA_INVALIDA)
+  const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const preferredDateIsISO = preferred_date && ISO_DATE_PATTERN.test(preferred_date);
+
+  if (doctor_id && preferredDateIsISO && !preferred_time && booking_state !== BOOKING_STATES.AWAITING_SLOTS) {
     return {
       tool: 'verificar_disponibilidade',
       params: { doctor_id, date: preferred_date },
       reason: 'guard_rail: date_set_no_time',
     };
+  }
+
+  // Se tem data mas não é ISO → dado ainda não foi resolvido pelo resolveDateChoice
+  // O LLM vai tentar resolver ou pedir ao usuário que especifique melhor
+  if (doctor_id && preferred_date && !preferredDateIsISO && !preferred_time) {
+    console.log(`[INTERCEPTOR] preferred_date não-ISO detectado: "${preferred_date}" — aguardando resolução`);
   }
 
   // REGRA 2: Tem médico, mas não tem data → DEVE buscar próximas datas disponíveis
@@ -1496,42 +1510,33 @@ app.post('/process', checkAgentAuth, async (req, res) => {
 
   try {
     // ======================================================
-    // BUG 1 FIX: COOLDOWN DE SESSÃO (deduplication por janela de tempo)
-    // Verificar se já houve resposta nos últimos 10 segundos para este
-    // phone_number + clinic_id. Se sim, enfileirar/ignorar para evitar
-    // mensagem de boas-vindas duplicada.
+    // COOLDOWN ATÔMICO — substitui o SELECT não-atômico anterior
+    // O SELECT anterior tinha race condition: duas requisições simultâneas
+    // passavam pelo guard porque ambas liam "sem resposta recente" antes
+    // de qualquer uma terminar. Esta função SQL é atômica (UPDATE condicional).
     // ======================================================
-    const COOLDOWN_WINDOW_MS = Number(process.env.SESSION_COOLDOWN_MS || 10000); // 10 segundos
+    const COOLDOWN_SECONDS = Math.floor(Number(process.env.SESSION_COOLDOWN_MS || 10000) / 1000);
     try {
-      const { data: lastResponse } = await supabase
-        .from('conversation_history')
-        .select('created_at')
-        .eq('clinic_id', envelope.clinic_id)
-        .eq('from_number', envelope.from)
-        .eq('role', 'assistant')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: lockAcquired, error: lockErr } = await supabase
+        .rpc('try_acquire_processing_lock', {
+          p_clinic_id: envelope.clinic_id,
+          p_from_number: envelope.from,
+          p_cooldown_seconds: COOLDOWN_SECONDS,
+        });
 
-      if (lastResponse?.created_at) {
-        const lastResponseTime = new Date(lastResponse.created_at).getTime();
-        const elapsed = Date.now() - lastResponseTime;
-        if (elapsed < COOLDOWN_WINDOW_MS) {
-          console.log(`[BUG1-FIX] Cooldown ativo para ${envelope.from}: última resposta há ${elapsed}ms (< ${COOLDOWN_WINDOW_MS}ms). Aguardando...`);
-          // Não retornar erro — retornar sinal para o Worker n8n agregar a mensagem
-          // ao contexto sem disparar nova resposta imediata
-          clearTimeout(timeoutId);
-          return res.json({
-            correlation_id: envelope.correlation_id,
-            final_message: null, // sinal: não enviar ao WhatsApp
-            actions: [{ type: 'cooldown_active', payload: { elapsed_ms: elapsed, cooldown_ms: COOLDOWN_WINDOW_MS } }],
-            debug: DEBUG ? { cooldown: true, elapsed_ms: elapsed } : undefined,
-          });
-        }
+      if (lockErr) {
+        log.warn({ err: String(lockErr) }, '[LOCK] Erro ao tentar lock — continuando');
+      } else if (lockAcquired === false) {
+        log.info({ from: envelope.from }, '[LOCK] Lock não adquirido — requisição duplicada ignorada');
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: null,
+          actions: [{ type: 'cooldown_active' }],
+        });
       }
-    } catch (cooldownErr) {
-      // Silencioso: não bloquear o fluxo por erro no cooldown
-      log.warn({ err: String(cooldownErr) }, '[BUG1-FIX] Erro no cooldown check — continuando normalmente');
+    } catch (lockEx) {
+      log.warn({ err: String(lockEx) }, '[LOCK] Exceção no lock — continuando sem proteção');
     }
 
     // ======================================================
@@ -1880,11 +1885,13 @@ if (DEBUG) {
 }
 
 // ========== MERGEAR SLOTS NO ESTADO PERSISTENTE ==========
-const updatedState = mergeExtractedSlots(
+const updatedState = await mergeExtractedSlots(
   activeConvState,
   extracted?.slots || {},
   doctors,
-  services
+  services,
+  supabase,            // cliente Supabase disponível no escopo da rota
+  envelope.clinic_id
 );
 
 // Salvar estado atualizado (sem sobrescrever last_question_asked ainda)
@@ -2405,6 +2412,10 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 
       // Loop do agente com tool_calls (máx 3 iterações)
       let agentStep = 0;
+      // Rastreador: conta quantas vezes cada tool foi chamada neste ciclo
+      // Evita o LLM chamar verificar_disponibilidade 3x e gerar 3 respostas iguais
+      const toolCallCount = {};
+      const MAX_CALLS_PER_TOOL = 1;
       while (agentStep < 3) {
         const agentResp = await openai.chat.completions.create(
           {
@@ -2429,6 +2440,23 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         // Processar chamadas de tool
         agentMessages.push(choice.message);
         for (const toolCall of choice.message.tool_calls) {
+          // Verificar limite de chamadas por tool
+          const toolName = toolCall.function.name;
+          toolCallCount[toolName] = (toolCallCount[toolName] || 0) + 1;
+          if (toolCallCount[toolName] > MAX_CALLS_PER_TOOL) {
+            log.warn({ tool: toolName, count: toolCallCount[toolName] }, '[LOOP] Tool chamada mais de uma vez neste ciclo — bloqueando');
+            agentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({
+                success: false,
+                blocked: true,
+                message: 'Esta ferramenta já foi usada neste ciclo. Encerre sua resposta com o que você já sabe.',
+              }),
+            });
+            continue;
+          }
+
           let toolArgs = {};
           try { toolArgs = JSON.parse(toolCall.function.arguments); } catch { /* sem args */ }
 
@@ -2471,11 +2499,14 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                 fallbackArgs,
                 { clinicId: envelope.clinic_id, userPhone: envelope.from }
               );
-              // Injetar resultado do fallback como resposta da tool
+              // Injetar resultado do fallback como contexto de sistema
+              // (não como tool result com ID fictício — isso causa erro na API da OpenAI)
               agentMessages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id + '_fallback',
-                content: JSON.stringify(fallbackRes || { error: 'sem datas disponíveis' }),
+                role: 'system',
+                content: '[BUSCA AUTOMÁTICA DE ALTERNATIVAS] Como não havia horários na data solicitada, ' +
+                  'busquei automaticamente as próximas datas disponíveis. ' +
+                  `Use estes dados para responder ao paciente: ${JSON.stringify(fallbackRes || { error: 'sem datas disponíveis' })}. ` +
+                  'Apresente as alternativas de forma amigável e pergunte qual o paciente prefere.',
               });
               if (fallbackRes?.dates?.length > 0) {
                 await updateConversationState(supabase, envelope.clinic_id, envelope.from, {

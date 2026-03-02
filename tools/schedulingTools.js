@@ -211,6 +211,36 @@ export const schedulingToolsDefinitions = [
                 required: ['appointment_id']
             }
         }
+    },
+    // ============================================================
+    // PRIORIDADE 4 — Motor de Alternativas
+    // Quando check_availability retornar vazio, chamar esta tool UMA Única VEZ.
+    // ============================================================
+    {
+        type: 'function',
+        function: {
+            name: 'find_alternatives',
+            strict: false,
+            description:
+                'Busca alternativas quando não há disponibilidade para o médico/data solicitados. ' +
+                'Retorna: (1) próxima data disponível com o mesmo médico e (2) outros médicos da mesma especialidade com vaga na data solicitada. ' +
+                'Use SOMENTE quando verificar_disponibilidade retornar vazio ou erro. ' +
+                'NÃO chame mais de uma vez por turno de conversa.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    doctor_id: {
+                        type: 'string',
+                        description: 'ID do médico original que não tem disponibilidade (obrigatório)'
+                    },
+                    data: {
+                        type: 'string',
+                        description: 'Data solicitada pelo paciente no formato YYYY-MM-DD (obrigatório)'
+                    }
+                },
+                required: ['doctor_id', 'data']
+            }
+        }
     }
 ];
 
@@ -303,6 +333,17 @@ export async function executeSchedulingTool(toolName, args, context = {}) {
             case 'confirmar_presenca':
                 return await schedulingService.confirmarAgendamento(clinicId, args.appointment_id);
 
+            // PRIORIDADE 4 — Motor de Alternativas
+            case 'find_alternatives':
+                if (!args.doctor_id || !args.data) {
+                    return {
+                        success: false,
+                        error: 'PARAMETROS_INVALIDOS',
+                        message: 'Para buscar alternativas, informe doctor_id e data (YYYY-MM-DD).'
+                    };
+                }
+                return await schedulingService.buscarAlternativas(clinicId, args.doctor_id, args.data);
+
             default:
                 return { success: false, message: `Tool desconhecida: ${toolName}` };
         }
@@ -321,7 +362,8 @@ export const SCHEDULING_TOOL_NAMES = [
     'criar_agendamento',
     'listar_meus_agendamentos',
     'cancelar_agendamento',
-    'confirmar_presenca'
+    'confirmar_presenca',
+    'find_alternatives' // PRIORIDADE 4
 ];
 
 export function isSchedulingTool(toolName) {

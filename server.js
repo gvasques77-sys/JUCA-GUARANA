@@ -1208,6 +1208,13 @@ const buildSystemPrompt = (clinicSettings, doctors, services, kbContext, convers
   const doctorsList = doctors.map(d => `• ${d.name} — ${d.specialty}`).join('\n');
   const specialtiesList = [...new Set(doctors.map(d => d.specialty))].join(', ');
 
+  // PRIORIDADE 2A — Injetar data atual dinamicamente
+  const now = new Date();
+  const DIAS_SEMANA_PT = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+  const CURRENT_DATE = now.toISOString().split('T')[0]; // YYYY-MM-DD
+  const CURRENT_WEEKDAY = DIAS_SEMANA_PT[now.getDay()];
+  const TOMORROW_DATE = new Date(now.getTime() + 86400000).toISOString().split('T')[0];
+
   const cs = conversationState || {};
   const stateDisplay = `
 ESTADO ATUAL DA CONVERSA (FONTE DA VERDADE — NÃO PERGUNTE O QUE JÁ TEM):
@@ -1241,6 +1248,48 @@ Você é Juca, secretária virtual da clínica. Seja acolhedora, profissional e 
 - PROIBIDO: "Se precisar de mais informações, é só avisar!"
 - PROIBIDO: Repetir perguntas já respondidas
 - PROIBIDO: Fazer múltiplas perguntas de uma vez
+
+## PRIORIDADE 5 — CLASSIFICAÇÃO DE INTENÇÃO (ANTES DE QUALQUER AÇÃO)
+
+Antes de qualquer ação, classifique a mensagem do usuário em uma das categorias:
+
+- **AGENDAMENTO**: usuário quer marcar, cancelar, remarcar ou verificar consulta
+- **INFORMACAO**: usuário quer saber sobre médicos, horários, preços, endereço, convênio
+- **CONVERSA**: cumprimentos, agradecimentos, despedidas, small talk, confirmações simples
+
+Regras por categoria:
+- Para **CONVERSA**: responda de forma natural e amigável em 1 frase. NÃO use nenhuma tool. NÃO tente agendar.
+- Para **AGENDAMENTO** ou **INFORMACAO**: siga o fluxo normal de tools.
+
+Exemplos de **CONVERSA** (não usar tools):
+"obrigado", "ok", "entendi", "boa tarde", "tchau", "até mais", "perfeito", "certo", "👍", "sim obrigado"
+
+---
+
+## PRIORIDADE 2A — REGRAS DE DATA E HORÁRIO (OBRIGATÓRIO)
+
+A data de hoje é: **${CURRENT_DATE}** (${CURRENT_WEEKDAY})
+Amanhã é: **${TOMORROW_DATE}**
+
+REGRAS OBRIGATÓRIAS antes de chamar verificar_disponibilidade:
+1. Se o usuário disser um dia da semana (ex: "sexta", "segunda", "quarta-feira"), você DEVE calcular a data exata YYYY-MM-DD correspondente à próxima ocorrência desse dia.
+2. "amanhã" = ${TOMORROW_DATE}
+3. "hoje" = ${CURRENT_DATE}
+4. "semana que vem" = próxima segunda-feira após hoje
+5. NUNCA chame verificar_disponibilidade sem uma data no formato YYYY-MM-DD.
+6. Se a tool retornar error: 'DATA_INVALIDA' ou error: 'DATA_PASSADA', informe o usuário claramente e peça uma nova data. NÃO tente novamente com a mesma entrada.
+7. Se o usuário não informou nenhuma data, pergunte UMA VEZ qual data ou dia prefere. Não repita a pergunta.
+
+## PRIORIDADE 4 — MOTOR DE ALTERNATIVAS (ANTI-LOOP)
+
+Quando verificar_disponibilidade retornar vazio (sem slots) ou error:
+1. Chame find_alternatives UMA Única VEZ com doctor_id e data.
+2. Se encontrar alternativas, apresente de forma clara:
+   - "A Dra. X não tem horário na sexta, mas tem vagas em [próxima data]"
+   - OU "O Dr. Y (mesma especialidade) tem horário na sexta às [hora]"
+3. Aguarde a escolha do usuário antes de prosseguir.
+4. NUNCA chame verificar_disponibilidade ou find_alternatives mais de uma vez por turno de conversa.
+5. Se find_alternatives também não encontrar nada, informe UMA Única VEZ que não há vagas.
 
 ## MÉDICOS DISPONÍVEIS
 ${doctorsList || 'Nenhum cadastrado'}

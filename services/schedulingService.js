@@ -264,12 +264,65 @@ async function verificarDisponibilidadeSimples(clinicId, doctorId, date) {
  */
 export async function verificarDisponibilidade(clinicId, doctorId, date) {
     try {
+        // ============================================================
+        // PRIORIDADE 1 — Guard Clauses: Validação Determinística de Entrada
+        // O LLM nunca deve decidir se há conflito — a função é 100% determinística.
+        // ============================================================
+
+        // Guard 1: Validar formato da data (YYYY-MM-DD)
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            console.warn(`[P1-GUARD] Data inválida recebida: '${date}'`);
+            return {
+                success: false,
+                error: 'DATA_INVALIDA',
+                message: 'A data informada está em formato inválido. Por favor, informe uma data no formato YYYY-MM-DD (ex: 2026-03-15).'
+            };
+        }
+
+        // Guard 2: Validar se a data é uma data real (ex: 2026-02-30 não existe)
         const dateObj = new Date(date + 'T12:00:00');
+        if (isNaN(dateObj.getTime())) {
+            console.warn(`[P1-GUARD] Data inválida (NaN): '${date}'`);
+            return {
+                success: false,
+                error: 'DATA_INVALIDA',
+                message: 'A data informada não é válida. Por favor, verifique e informe uma data correta.'
+            };
+        }
+
+        // Guard 3: Validar se a data não está no passado
         const hoje = new Date();
         hoje.setHours(0, 0, 0, 0);
 
         if (dateObj < hoje) {
-            return { success: false, message: 'Não é possível agendar para datas passadas.' };
+            console.warn(`[P1-GUARD] Data no passado: '${date}'`);
+            return {
+                success: false,
+                error: 'DATA_PASSADA',
+                message: `A data ${formatDate(date)} já passou. Por favor, informe uma data futura.`
+            };
+        }
+
+        // Guard 4: Validar se a data não está muito no futuro (mais de 1 ano)
+        const umAnoFuturo = new Date();
+        umAnoFuturo.setFullYear(umAnoFuturo.getFullYear() + 1);
+        if (dateObj > umAnoFuturo) {
+            console.warn(`[P1-GUARD] Data muito distante no futuro: '${date}'`);
+            return {
+                success: false,
+                error: 'DATA_MUITO_DISTANTE',
+                message: `A data ${formatDate(date)} está muito distante. Agendamentos podem ser feitos com até 1 ano de antecedência.`
+            };
+        }
+
+        // Guard 5: Validar doctorId
+        if (!doctorId || typeof doctorId !== 'string' || doctorId.trim() === '') {
+            console.warn(`[P1-GUARD] doctorId inválido: '${doctorId}'`);
+            return {
+                success: false,
+                error: 'MEDICO_INVALIDO',
+                message: 'Médico não especificado. Por favor, informe o médico desejado.'
+            };
         }
 
         // Cache L1: Redis
@@ -924,6 +977,116 @@ Se desejar reagendar, é só me avisar!
     } catch (error) {
         console.error('Erro ao cancelar:', error);
         return { success: false, message: 'Erro ao cancelar.', error: error.message };
+    }
+}
+
+// ============================================================
+// PRIORIDADE 4 — Motor de Alternativas (find_alternatives)
+// Quando não há disponibilidade, oferecer opções reais ao paciente.
+// ============================================================
+
+/**
+ * Busca alternativas quando não há disponibilidade:
+ * Opção 1: Próxima data disponível com o mesmo médico (próximos 14 dias)
+ * Opção 2: Outros médicos da mesma especialidade com disponibilidade na data solicitada
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} doctorId - UUID do médico solicitado
+ * @param {string} date - data solicitada (YYYY-MM-DD)
+ */
+export async function buscarAlternativas(clinicId, doctorId, date) {
+    try {
+        const alternativas = {
+            success: true,
+            proxima_data_mesmo_medico: null,
+            outros_medicos_mesma_especialidade: [],
+            message: ''
+        };
+
+        // Buscar dados do médico solicitado
+        const { data: doctor, error: doctorError } = await supabase
+            .from('doctors')
+            .select('id, name, specialty')
+            .eq('id', doctorId)
+            .eq('clinic_id', clinicId)
+            .single();
+
+        if (doctorError || !doctor) {
+            return { success: false, message: 'Médico não encontrado.' };
+        }
+
+        // -------------------------------------------------------
+        // Opção 1: Próxima data disponível com o mesmo médico
+        // -------------------------------------------------------
+        const proximasDatas = await buscarProximasDatasDisponiveis(clinicId, doctorId, 14, 0, date);
+        if (proximasDatas.success && proximasDatas.dates && proximasDatas.dates.length > 0) {
+            alternativas.proxima_data_mesmo_medico = proximasDatas.dates[0];
+        }
+
+        // -------------------------------------------------------
+        // Opção 2: Outros médicos da mesma especialidade com vaga na data solicitada
+        // -------------------------------------------------------
+        if (doctor.specialty && date) {
+            const { data: outrosMedicos } = await supabase
+                .from('doctors')
+                .select('id, name, specialty')
+                .eq('clinic_id', clinicId)
+                .eq('specialty', doctor.specialty)
+                .eq('active', true)
+                .neq('id', doctorId); // excluir o médico original
+
+            if (outrosMedicos && outrosMedicos.length > 0) {
+                for (const outroMedico of outrosMedicos) {
+                    const slots = await verificarDisponibilidadeSimples(clinicId, outroMedico.id, date);
+                    if (slots.length > 0) {
+                        alternativas.outros_medicos_mesma_especialidade.push({
+                            doctor_id: outroMedico.id,
+                            doctor_name: outroMedico.name,
+                            specialty: outroMedico.specialty,
+                            date: date,
+                            formatted_date: formatDate(date),
+                            available_slots: slots,
+                            slots_count: slots.length
+                        });
+                    }
+                    // Limitar a 2 médicos alternativos
+                    if (alternativas.outros_medicos_mesma_especialidade.length >= 2) break;
+                }
+            }
+        }
+
+        // -------------------------------------------------------
+        // Montar mensagem de resposta
+        // -------------------------------------------------------
+        const temAlternativas = alternativas.proxima_data_mesmo_medico ||
+            alternativas.outros_medicos_mesma_especialidade.length > 0;
+
+        if (!temAlternativas) {
+            alternativas.message = `Não encontrei alternativas disponíveis para ${doctor.name} nos próximos 14 dias nem outros médicos de ${doctor.specialty} com vaga em ${formatDate(date)}.`;
+            return alternativas;
+        }
+
+        let msg = `Não há horários para ${doctor.name} em ${formatDate(date)}, mas encontrei estas alternativas:\n\n`;
+
+        if (alternativas.proxima_data_mesmo_medico) {
+            const d = alternativas.proxima_data_mesmo_medico;
+            msg += `📅 **${doctor.name}** tem vaga em: ${d.day_of_week}, ${d.formatted_date} (${d.slots_count} horários)\n`;
+        }
+
+        if (alternativas.outros_medicos_mesma_especialidade.length > 0) {
+            for (const alt of alternativas.outros_medicos_mesma_especialidade) {
+                const primeirosSlots = alt.available_slots.slice(0, 3).join(', ');
+                msg += `👨‍⚕️ **${alt.doctor_name}** (${alt.specialty}) tem vaga em ${alt.formatted_date} às: ${primeirosSlots}\n`;
+            }
+        }
+
+        msg += `\nQual opção você prefere?`;
+        alternativas.message = msg;
+
+        return alternativas;
+
+    } catch (error) {
+        console.error('[P4] Erro ao buscar alternativas:', error);
+        return { success: false, message: 'Erro ao buscar alternativas.', error: error.message };
     }
 }
 

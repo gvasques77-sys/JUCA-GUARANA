@@ -1808,12 +1808,27 @@ if (previousMessages.length === 0) {
     }
 
     // CAMADA 2 — Cenário A: Primeira mensagem → retornar saudão com botões interativos
-    const isFirstMessage = true;
+    // CORREÇÃO 2+4: Só retorna greeting se NÃO houver intent_override (botão clicado)
+    // Se houver intent_override, significa que o usuário clicou em um botão e o fluxo
+    // deve continuar normalmente (não repetir o greeting)
+    const isFirstMessage = !envelope.intent_override;
     if (isFirstMessage) {
+      const greetingMessage = 'Olá! Sou a Juca, secretária virtual da clínica. Como posso te ajudar?';
+      // CORREÇÃO 2: Salvar histórico antes de retornar (evita loop de greeting)
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: greetingMessage,
+        intentGroup: 'other',
+        intent: 'greeting',
+        slots: null,
+      });
       clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
-        final_message: 'Olá! Sou a Juca, secretária virtual da clínica. Como posso te ajudar?',
+        final_message: greetingMessage,
         actions: [{
           type: 'send_interactive_buttons',
           payload: {
@@ -2007,10 +2022,22 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             preferred_date: null,
             preferred_time: null,
           });
+          const stuckLimitMsg = 'Parece que você saiu do fluxo de agendamento. Quando quiser, é só me dizer: você quer marcar, remarcar, cancelar ou tirar uma dúvida?';
+          // CORREÇÃO 2: Salvar histórico antes de retornar
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: stuckLimitMsg,
+            intentGroup: 'other',
+            intent: 'stuck_limit',
+            slots: null,
+          });
           clearTimeout(timeoutId);
           return res.json({
             correlation_id: envelope.correlation_id,
-            final_message: 'Parece que você saiu do fluxo de agendamento. Quando quiser, é só me dizer: você quer marcar, remarcar, cancelar ou tirar uma dúvida?',
+            final_message: stuckLimitMsg,
             actions: [],
             debug: DEBUG ? { fix3: 'stuck_limit_reached', stuck_counter_off_topic: currentStuckOffTopic } : undefined,
           });
@@ -2022,6 +2049,17 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           ? `Ainda estou buscando horários para ${specialtyDisplay}. Um momento por favor... Se quiser continuar o agendamento, é só me dizer a data de preferência.`
           : `Ainda estou aqui para te ajudar! Você quer marcar, remarcar, cancelar ou tirar uma dúvida?`;
 
+        // CORREÇÃO 2: Salvar histórico antes de retornar
+        await saveConversationTurn({
+          clinicId: envelope.clinic_id,
+          fromNumber: envelope.from,
+          correlationId: envelope.correlation_id,
+          userText: envelope.message_text,
+          assistantText: contextMsg,
+          intentGroup: 'other',
+          intent: 'state_preserved',
+          slots: null,
+        });
         clearTimeout(timeoutId);
         return res.json({
           correlation_id: envelope.correlation_id,
@@ -2032,11 +2070,22 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       }
 
       // Sem fluxo ativo — comportamento original
+      const noFlowMsg = 'Só para confirmar: você quer marcar, remarcar, cancelar ou tirar uma dúvida?';
+      // CORREÇÃO 2: Salvar histórico antes de retornar
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: noFlowMsg,
+        intentGroup: 'other',
+        intent: 'no_flow',
+        slots: null,
+      });
       clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
-        final_message:
-          'Só para confirmar: você quer marcar, remarcar, cancelar ou tirar uma dúvida?',
+        final_message: noFlowMsg,
         actions: [],
         debug: DEBUG ? { extracted } : undefined,
       });
@@ -2082,10 +2131,22 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           to: BOOKING_STATES.IDLE,
           trigger: 'button_confirm_no',
         }, envelope.clinic_id, envelope.from);
+        const cancelMsg1 = 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊';
+        // CORREÇÃO 2: Salvar histórico antes de retornar
+        await saveConversationTurn({
+          clinicId: envelope.clinic_id,
+          fromNumber: envelope.from,
+          correlationId: envelope.correlation_id,
+          userText: envelope.message_text,
+          assistantText: cancelMsg1,
+          intentGroup: 'scheduling',
+          intent: 'confirm_no',
+          slots: null,
+        });
         clearTimeout(timeoutId);
         return res.json({
           correlation_id: envelope.correlation_id,
-          final_message: 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊',
+          final_message: cancelMsg1,
           actions: [],
           debug: DEBUG ? { state: newState } : undefined,
         });
@@ -2115,20 +2176,44 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           to: BOOKING_STATES.IDLE,
           trigger: 'user_cancelled',
         }, envelope.clinic_id, envelope.from);
+        const cancelMsg2 = 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊';
+        // CORREÇÃO 2: Salvar histórico antes de retornar
+        await saveConversationTurn({
+          clinicId: envelope.clinic_id,
+          fromNumber: envelope.from,
+          correlationId: envelope.correlation_id,
+          userText: envelope.message_text,
+          assistantText: cancelMsg2,
+          intentGroup: 'scheduling',
+          intent: 'cancel',
+          slots: null,
+        });
         clearTimeout(timeoutId);
         return res.json({
           correlation_id: envelope.correlation_id,
-          final_message: 'Tudo bem! O agendamento foi cancelado. O que você gostaria de fazer? 😊',
+          final_message: cancelMsg2,
           actions: [],
           debug: DEBUG ? { state: newState } : undefined,
         });
 
       } else {
         // Resposta ambígua → reenviar mensagem de confirmação
+        const ambiguousConfirmMsg = buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name);
+        // CORREÇÃO 2: Salvar histórico antes de retornar
+        await saveConversationTurn({
+          clinicId: envelope.clinic_id,
+          fromNumber: envelope.from,
+          correlationId: envelope.correlation_id,
+          userText: envelope.message_text,
+          assistantText: ambiguousConfirmMsg,
+          intentGroup: 'scheduling',
+          intent: 'awaiting_confirmation',
+          slots: null,
+        });
         clearTimeout(timeoutId);
         return res.json({
           correlation_id: envelope.correlation_id,
-          final_message: buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name),
+          final_message: ambiguousConfirmMsg,
           actions: [],
           debug: DEBUG ? { booking_state: BOOKING_STATES.CONFIRMING } : undefined,
         });
@@ -2147,10 +2232,26 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         to: BOOKING_STATES.CONFIRMING,
         trigger: 'all_fields_ready',
       }, envelope.clinic_id, envelope.from);
+      // CORREÇÃO 5: Atualizar conversation_stage para 'awaiting_confirmation'
+      await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+        conversation_stage: 'awaiting_confirmation',
+      });
+      const confirmMsg = buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name);
+      // CORREÇÃO 2: Salvar histórico antes de retornar
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: confirmMsg,
+        intentGroup: 'scheduling',
+        intent: 'awaiting_confirmation',
+        slots: null,
+      });
       clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
-        final_message: buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name),
+        final_message: confirmMsg,
         // CAMADA 2 — Cenário B: Botões de confirmação interativos
         actions: [{
           type: 'send_interactive_buttons',
@@ -2181,14 +2282,28 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       // Transicionar para COLLECTING_DATE (que aqui equivale a COLLECTING_SPECIALTY)
       await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
         booking_state: BOOKING_STATES.COLLECTING_DATE,
+        // CORREÇÃO 5: Atualizar conversation_stage para 'scheduling'
+        conversation_stage: 'scheduling',
       });
       updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
       console.log('[FIX4] COLLECTING_SPECIALTY: doctor_id nulo, pedindo especialidade');
       const doctorList = doctors.map(d => `${d.name} — ${d.specialty}`).join(', ');
+      const specialtyMsg = `Qual especialidade você gostaria de agendar? Aqui estão os médicos disponíveis: ${doctorList}.`;
+      // CORREÇÃO 2: Salvar histórico antes de retornar
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: specialtyMsg,
+        intentGroup: 'scheduling',
+        intent: 'schedule_new',
+        slots: null,
+      });
       clearTimeout(timeoutId);
       return res.json({
         correlation_id: envelope.correlation_id,
-        final_message: `Qual especialidade você gostaria de agendar? Aqui estão os médicos disponíveis: ${doctorList}.`,
+        final_message: specialtyMsg,
         actions: [],
         debug: DEBUG ? { fix4: 'collecting_specialty', booking_state: BOOKING_STATES.COLLECTING_DATE } : undefined,
       });
@@ -2781,6 +2896,34 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       intent: extracted?.intent,
       slots: extracted?.slots,
     });
+
+    // CORREÇÃO 5: Atualizar conversation_stage com base no intent_group
+    // para que o estado reflita o estágio atual da conversa
+    try {
+      let newStage = null;
+      const ig = extracted?.intent_group;
+      if (ig === 'scheduling') {
+        const bs = updatedState?.booking_state;
+        if (bs === BOOKING_STATES.BOOKED) newStage = 'booked';
+        else if (bs === BOOKING_STATES.CONFIRMING) newStage = 'awaiting_confirmation';
+        else newStage = 'scheduling';
+      } else if (ig === 'cancellation') {
+        newStage = 'cancellation';
+      } else if (ig === 'reschedule') {
+        newStage = 'reschedule';
+      } else if (ig === 'info') {
+        newStage = 'info';
+      } else {
+        newStage = 'active';
+      }
+      if (newStage) {
+        await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+          conversation_stage: newStage,
+        });
+      }
+    } catch (stageErr) {
+      log.warn({ err: String(stageErr) }, 'conversation_stage_update_failed');
+    }
 
     clearTimeout(timeoutId);
     return res.json({

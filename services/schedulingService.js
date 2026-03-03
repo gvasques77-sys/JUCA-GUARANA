@@ -635,7 +635,19 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
         // Se dataInicio for fornecida, buscar a partir dela; senão, a partir de hoje
         const baseDate = dataInicio ? new Date(dataInicio + 'T12:00:00') : new Date();
 
-        for (let i = 1; i <= days; i++) {   // começa em 1 (dia seguinte à baseDate)
+        // CORREÇÃO 1: Buscar o nome do médico para a mensagem
+        let doctorName = null;
+        try {
+            const { data: doc } = await supabase
+                .from('doctors')
+                .select('name, specialty')
+                .eq('id', doctorId)
+                .eq('clinic_id', clinicId)
+                .single();
+            if (doc) doctorName = `${doc.name} (${doc.specialty})`;
+        } catch { /* ignora erro — nome é opcional */ }
+
+        for (let i = 0; i <= days; i++) {   // começa em 0 (inclui hoje se ainda há horários)
             const data = new Date(baseDate);
             data.setDate(data.getDate() + i);
             const dateStr = data.toISOString().split('T')[0];
@@ -644,12 +656,14 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
             const slots = await verificarDisponibilidadeSimples(clinicId, doctorId, dateStr);
 
             if (slots.length > 0) {
+                // CORREÇÃO 1: Incluir os horários reais (não apenas a contagem)
                 datasDisponiveis.push({
                     date: dateStr,
                     date_iso: dateStr,
                     formatted_date: formatDate(dateStr),
                     day_of_week: DIAS_SEMANA[getDayOfWeek(dateStr)],
-                    slots_count: slots.length
+                    slots_count: slots.length,
+                    slots: slots.slice(0, 6) // máximo 6 slots por dia para não poluir
                 });
             }
 
@@ -664,11 +678,14 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
             };
         }
 
-        let mensagem = `Próximas datas disponíveis:\n\n`;
-        datasDisponiveis.forEach((d, idx) => {
-            mensagem += `${idx + 1}. ${d.day_of_week}, ${d.formatted_date} — ${d.slots_count} horários\n`;
+        // CORREÇÃO 1: Mensagem com horários reais para cada data
+        const nomeExibicao = doctorName || 'o médico selecionado';
+        let mensagem = `📅 ${nomeExibicao} tem os seguintes horários disponíveis:\n\n`;
+        datasDisponiveis.forEach((d) => {
+            const slotsStr = d.slots.join(', ');
+            mensagem += `${d.day_of_week}, ${d.formatted_date} — ${slotsStr}\n`;
         });
-        mensagem += `\nQual data você prefere?`;
+        mensagem += `\nQual dia e horário você prefere?`;
 
         return { success: true, message: mensagem, dates: datasDisponiveis };
 

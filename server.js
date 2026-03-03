@@ -1423,17 +1423,43 @@ Se verificar_disponibilidade retornar vazio ou erro:
 
 ---
 
-## CORREÇÃO 4 — FLUXO DE AGENDAMENTO: SEQUÊNCIA OBRIGATÓRIA
-Para MARCAR uma consulta, colete nesta ordem (pule etapas já respondidas — veja o ESTADO ATUAL acima):
-1. Especialidade ou nome do médico
-2. Data preferida
-3. Horário preferido (se não informado junto com a data)
-4. Nome completo do paciente (se não estiver no histórico)
-5. CONFIRMAR: 'Confirmo consulta com [médico] no dia [data] às [hora]?'
-6. Agendar após confirmação
+## FLUXO DE AGENDAMENTO: SEQUÊNCIA OBRIGATÓRIA (v4)
 
-REGRA CRÍTICA: Se você já tem especialidade + médico (✅ no estado), a PRÓXIMA PERGUNTA DEVE SER sobre data.
-Nunca repita perguntas sobre médico ou especialidade quando já estão preenchidos.
+Ao agendar uma consulta, siga RIGOROSAMENTE esta sequência:
+
+1. **ESPECIALIDADE/MÉDICO** — Pergunte qual especialidade ou médico o paciente deseja.
+   Quando o paciente responder, resolva o médico e IMEDIATAMENTE chame a tool `buscar_proximas_datas`
+   com o doctor_id para obter os próximos horários disponíveis. NÃO pergunte a data antes de chamar a tool.
+
+2. **DATA E HORÁRIO** — Apresente os horários disponíveis retornados pela tool e pergunte qual o paciente prefere.
+   FORMATO OBRIGATÓRIO:
+   "📅 A [nome do médico] ([especialidade]) tem os seguintes horários disponíveis:
+   [dia da semana], [DD/MM] — [horário1], [horário2], [horário3]
+   [dia da semana], [DD/MM] — [horário1], [horário2]
+   Qual dia e horário você prefere?"
+   NUNCA pergunte a data de forma aberta (ex: "Qual data você prefere?").
+   SEMPRE mostre as opções disponíveis primeiro.
+
+3. **NOME DO PACIENTE** — Pergunte o nome completo (se ainda não foi informado).
+   NUNCA peça nome e data na mesma pergunta.
+
+4. **CONFIRMAÇÃO** — Apresente um resumo e peça confirmação:
+   "Vou confirmar:
+   👨‍⚕️ [nome médico] — [especialidade]
+   📅 [data] às [horário]
+   👤 [nome paciente]
+   Confirma o agendamento?"
+
+5. **AGENDAR** — Somente após confirmação explícita ("sim", "confirmo", "pode agendar"),
+   chame a tool `criar_agendamento`.
+
+REGRAS CRÍTICAS:
+- Se o paciente pedir uma data que o médico não atende, NÃO diga apenas "não encontrei".
+  Use a tool `buscar_proximas_datas` para mostrar alternativas.
+- NUNCA invente horários. Use SOMENTE dados retornados pelas tools.
+- NUNCA repita a mesma pergunta que já foi respondida.
+- Cada mensagem deve coletar NO MÁXIMO UM dado novo do paciente.
+- Se você já tem especialidade + médico (✅ no estado), a PRÓXIMA AÇÃO DEVE SER chamar buscar_proximas_datas.
 NUNCA envie a mesma mensagem duas vezes seguidas.
 
 ---
@@ -1808,11 +1834,23 @@ if (previousMessages.length === 0) {
     }
 
     // CAMADA 2 — Cenário A: Primeira mensagem → retornar saudão com botões interativos
+    // CORREÇÃO 4: Verificar se greeting já foi enviado recentemente (evita duplicação)
     // CORREÇÃO 2+4: Só retorna greeting se NÃO houver intent_override (botão clicado)
-    // Se houver intent_override, significa que o usuário clicou em um botão e o fluxo
-    // deve continuar normalmente (não repetir o greeting)
     const isFirstMessage = !envelope.intent_override;
     if (isFirstMessage) {
+      // CORREÇÃO 4: Verificar se já existe um greeting recente no conversation_state
+      // Isso evita duplicação quando duas mensagens chegam em rápida sucessão
+      const greetingAlreadySent = conversationState?.greeting_sent_at &&
+        (Date.now() - new Date(conversationState.greeting_sent_at).getTime()) < 10000; // 10s
+      if (greetingAlreadySent) {
+        console.log(`[CORREÇÃO 4] Greeting já enviado há menos de 10s para ${envelope.from} — bloqueando duplicação`);
+        clearTimeout(timeoutId);
+        return res.json({
+          correlation_id: envelope.correlation_id,
+          final_message: null,
+          actions: [{ type: 'dedup_blocked', payload: { reason: 'greeting_already_sent' } }],
+        });
+      }
       const greetingMessage = 'Olá! Sou a Juca, secretária virtual da clínica. Como posso te ajudar?';
       // CORREÇÃO 2: Salvar histórico antes de retornar (evita loop de greeting)
       await saveConversationTurn({
@@ -1824,6 +1862,11 @@ if (previousMessages.length === 0) {
         intentGroup: 'other',
         intent: 'greeting',
         slots: null,
+      });
+      // CORREÇÃO 4: Marcar que greeting foi enviado no conversation_state
+      await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+        greeting_sent_at: new Date().toISOString(),
+        conversation_stage: 'greeting',
       });
       clearTimeout(timeoutId);
       return res.json({
@@ -2435,16 +2478,30 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           // FIX 3: Resetar stuck_counter ao encontrar slots com sucesso
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
             last_suggested_dates: toolResult.dates,
+            // CORREÇÃO 5: Salvar last_suggested_slots também
+            last_suggested_slots: toolResult.dates.flatMap(d => (d.slots || []).map(s => ({ date: d.date, time: s }))),
             booking_state: BOOKING_STATES.COLLECTING_DATE,
             stuck_counter_slots: 0,
           });
-          const dateList = toolResult.dates.slice(0, BUSCA_SLOTS_ABERTA_MAX)
-            .map((d, i) => `${i + 1}) ${d.day_of_week}, ${d.formatted_date}`).join('\n');
-          // FIX 3: Injetar slots reais no prompt — o LLM NUNCA deve inventar datas
-          const slotsInjection = `\nSLOTS DISPONÍVEIS REAIS — use APENAS estes, nunca invente outros:\n${dateList}`;
+          // CORREÇÃO 2: Usar a mensagem já formatada pelo schedulingService (com horários reais)
+          // Se a mensagem já vem formatada com slots, usar diretamente
+          const hasFormattedMessage = toolResult.message && toolResult.message.includes('horários disponíveis');
+          let displayMessage;
+          if (hasFormattedMessage) {
+            // Mensagem já formatada pelo schedulingService.buscarProximasDatasDisponiveis
+            displayMessage = toolResult.message;
+          } else {
+            // Fallback: formatar manualmente com slots se disponíveis
+            const dateList = toolResult.dates.slice(0, BUSCA_SLOTS_ABERTA_MAX)
+              .map(d => {
+                const slotsStr = d.slots ? d.slots.join(', ') : `${d.slots_count || '?'} horários`;
+                return `${d.day_of_week}, ${d.formatted_date} — ${slotsStr}`;
+              }).join('\n');
+            displayMessage = `📅 ${updatedState.doctor_name || 'Médico selecionado'} tem os seguintes horários disponíveis:\n\n${dateList}\n\nQual dia e horário você prefere?`;
+          }
           decided = {
             decision_type: 'proceed',
-            message: `Tenho os seguintes horários disponíveis com ${updatedState.doctor_name}:\n${dateList}\n\nQual dessas datas funciona melhor pra você?`,
+            message: displayMessage,
             actions: [{ type: 'log' }],
             confidence: 1,
           };
@@ -2738,32 +2795,65 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
               );
               // Injetar resultado do fallback como contexto de sistema
               // (não como tool result com ID fictício — isso causa erro na API da OpenAI)
-              agentMessages.push({
-                role: 'system',
-                content: '[BUSCA AUTOMÁTICA DE ALTERNATIVAS] Como não havia horários na data solicitada, ' +
-                  'busquei automaticamente as próximas datas disponíveis. ' +
-                  `Use estes dados para responder ao paciente: ${JSON.stringify(fallbackRes || { error: 'sem datas disponíveis' })}. ` +
-                  'Apresente as alternativas de forma amigável e pergunte qual o paciente prefere.',
-              });
               if (fallbackRes?.dates?.length > 0) {
+                // CORREÇÃO 3+5: Salvar last_suggested_dates e last_suggested_slots
                 await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
                   last_suggested_dates: fallbackRes.dates,
+                  last_suggested_slots: fallbackRes.dates.flatMap(d => (d.slots || []).map(s => ({ date: d.date, time: s }))),
                   booking_state: BOOKING_STATES.COLLECTING_DATE,
+                  stuck_counter_slots: 0,
+                });
+                // CORREÇÃO 3: Usar mensagem já formatada com horários reais
+                const fallbackMsg = fallbackRes.message && fallbackRes.message.includes('horários disponíveis')
+                  ? fallbackRes.message
+                  : (() => {
+                      const dateList = fallbackRes.dates.slice(0, 5)
+                        .map(d => {
+                          const slotsStr = d.slots ? d.slots.join(', ') : `${d.slots_count || '?'} horários`;
+                          return `${d.day_of_week}, ${d.formatted_date} — ${slotsStr}`;
+                        }).join('\n');
+                      return `${updatedState.doctor_name || 'O médico'} não atende nessa data. Os próximos horários disponíveis são:\n\n${dateList}\n\nQual dia e horário você prefere?`;
+                    })();
+                agentMessages.push({
+                  role: 'system',
+                  content: `[BUSCA AUTOMÁTICA DE ALTERNATIVAS] Não havia horários na data solicitada. ` +
+                    `Use EXATAMENTE esta mensagem para responder ao paciente: "${fallbackMsg}". ` +
+                    `Não invente outros horários. Não pergunte a data novamente.`,
+                });
+              } else {
+                agentMessages.push({
+                  role: 'system',
+                  content: '[BUSCA AUTOMÁTICA DE ALTERNATIVAS] Não encontrei horários disponíveis nos próximos 14 dias. ' +
+                    'Informe o paciente UMA Única VEZ e pergunte se deseja tentar outro médico ou especialidade.',
                 });
               }
             }
           }
 
-          // Persistir opções apresentadas no estado para suportar respostas como "o primeiro"
+          // CORREÇÃO 5: Persistir opções apresentadas no estado com slots reais
           if (toolCall.function.name === 'buscar_proximas_datas' && toolResult?.success) {
+            const datesWithSlots = (toolResult.dates || []).map(d => ({
+              date: d.date,
+              date_iso: d.date_iso || d.date,
+              formatted_date: d.formatted_date,
+              day_of_week: d.day_of_week,
+              slots_count: d.slots_count || (d.slots || []).length,
+              slots: d.slots || [], // CORREÇÃO 5: Incluir slots reais
+            }));
+            // CORREÇÃO 5: Salvar last_suggested_slots como lista plana de {date, time}
+            const flatSlots = datesWithSlots.flatMap(d =>
+              (d.slots || []).map(s => ({ date: d.date, time: s }))
+            );
             await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-              last_suggested_dates: toolResult.dates || [],
+              last_suggested_dates: datesWithSlots,
+              last_suggested_slots: flatSlots,
               booking_state: BOOKING_STATES.COLLECTING_DATE,
             });
           }
           if (toolCall.function.name === 'verificar_disponibilidade' && toolResult?.success) {
+            const availSlots = toolResult.available_slots || toolResult.slots || [];
             await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-              last_suggested_slots: toolResult.available_slots || [],
+              last_suggested_slots: availSlots.map(s => ({ date: toolResult.date || null, time: s })),
               booking_state: BOOKING_STATES.AWAITING_SLOTS,
             });
           }

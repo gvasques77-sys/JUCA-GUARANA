@@ -1818,9 +1818,9 @@ if (previousMessages.length === 0) {
           type: 'send_interactive_buttons',
           payload: {
             buttons: [
-              { id: 'schedule_new',      title: '\uD83D\uDCC5 Agendar consulta' },
-              { id: 'view_appointments', title: '\uD83D\uDCCB Ver minha consulta' },
-              { id: 'human_handoff',     title: '\uD83D\uDCAC Falar com atendente' },
+              { id: 'schedule_new',      title: '\uD83D\uDCC5 Agendar consulta' },   // 19 chars
+              { id: 'view_appointments', title: '\uD83D\uDCCB Meus agendamentos' },   // 20 chars
+              { id: 'human_handoff',     title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
             ],
           },
         }],
@@ -2260,7 +2260,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                 buttons: [
                   { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                   { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                  { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                  { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
                 ],
               },
             }],
@@ -2305,7 +2305,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                   buttons: [
                     { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                     { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
                   ],
                 },
               }],
@@ -2359,7 +2359,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                   buttons: [
                     { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                     { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar com atendente' },
+                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
                   ],
                 },
               }],

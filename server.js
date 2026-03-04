@@ -790,10 +790,13 @@ async function mergeExtractedSlots(currentState, extractedSlots, doctors, servic
   // Horário (extract_intent usa 'preferred_time_text')
   const timeInput = extractedSlots.preferred_time || extractedSlots.preferred_time_text;
   if (timeInput) {
+    // FIX v5.1: Safety net — normalizar last_suggested_slots (pode ser objetos {date,time} ou strings)
+    const rawSlots = currentState.last_suggested_slots || [];
+    const normalizedSlots = rawSlots.map(s => typeof s === 'string' ? s : (s?.time || null)).filter(Boolean);
     // Tentar resolver para HH:MM antes de salvar
     const resolvedTime = resolveTimeChoice(
       timeInput,
-      currentState.last_suggested_slots || []
+      normalizedSlots
     );
     if (resolvedTime) {
       updates.preferred_time = resolvedTime;
@@ -917,8 +920,12 @@ function findClosestSlot(timeStr, slots) {
   const targetMinutes = targetH * 60 + (targetM || 0);
   let closest = null;
   let minDiff = Infinity;
-  for (const slot of slots) {
+  for (const rawSlot of slots) {
+    // FIX v5.1: Guard — normalizar se for objeto {date, time}
+    const slot = typeof rawSlot === 'string' ? rawSlot : (rawSlot?.time || null);
+    if (!slot || typeof slot !== 'string' || !slot.includes(':')) continue;
     const [h, m] = slot.split(':').map(Number);
+    if (isNaN(h) || isNaN(m)) continue;
     const diff = Math.abs((h * 60 + m) - targetMinutes);
     if (diff < minDiff) { minDiff = diff; closest = slot; }
   }
@@ -1011,26 +1018,32 @@ function resolveTimeChoice(userInput, suggestedSlots = []) {
   const input = userInput.toLowerCase().trim()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+  // FIX v5.1: Normalizar last_suggested_slots — pode ser array de strings "HH:MM"
+  // ou array de objetos {date, time}. Converter tudo para strings "HH:MM".
+  const slots = suggestedSlots
+    .map(s => typeof s === 'string' ? s : (s?.time || null))
+    .filter(Boolean);
+
   // Referências posicionais
-  if (/prim[ea]ira?|^1[ao°]?$|^1$/.test(input) && suggestedSlots[0]) return suggestedSlots[0];
-  if (/segunda?|^2[ao°]?$|^2$/.test(input) && suggestedSlots[1]) return suggestedSlots[1];
-  if (/terceira?|^3[ao°]?$|^3$/.test(input) && suggestedSlots[2]) return suggestedSlots[2];
-  if (/quarta?|^4[ao°]?$|^4$/.test(input) && suggestedSlots[3]) return suggestedSlots[3];
+  if (/prim[ea]ira?|^1[ao°]?$|^1$/.test(input) && slots[0]) return slots[0];
+  if (/segunda?|^2[ao°]?$|^2$/.test(input) && slots[1]) return slots[1];
+  if (/terceira?|^3[ao°]?$|^3$/.test(input) && slots[2]) return slots[2];
+  if (/quarta?|^4[ao°]?$|^4$/.test(input) && slots[3]) return slots[3];
 
   // Períodos do dia
   if (/manha/.test(input)) {
-    const manha = suggestedSlots.find(s => parseInt(s.split(':')[0]) < 12);
+    const manha = slots.find(s => parseInt(s.split(':')[0]) < 12);
     if (manha) return manha;
   }
   if (/tarde/.test(input)) {
-    const tarde = suggestedSlots.find(s => {
+    const tarde = slots.find(s => {
       const h = parseInt(s.split(':')[0]);
       return h >= 12 && h < 18;
     });
     if (tarde) return tarde;
   }
   if (/noite/.test(input)) {
-    const noite = suggestedSlots.find(s => parseInt(s.split(':')[0]) >= 18);
+    const noite = slots.find(s => parseInt(s.split(':')[0]) >= 18);
     if (noite) return noite;
   }
 
@@ -1040,9 +1053,9 @@ function resolveTimeChoice(userInput, suggestedSlots = []) {
     const h = hourMatch[1].padStart(2, '0');
     const m = hourMatch[2] || '00';
     const formatted = `${h}:${m}`;
-    const exact = suggestedSlots.find(s => s === formatted);
+    const exact = slots.find(s => s === formatted);
     if (exact) return exact;
-    const closest = findClosestSlot(formatted, suggestedSlots);
+    const closest = findClosestSlot(formatted, slots);
     if (closest) return closest;
     // Se não há lista de slots mas o horário parece válido, retornar mesmo assim
     if (parseInt(h) >= 6 && parseInt(h) <= 22) return formatted;

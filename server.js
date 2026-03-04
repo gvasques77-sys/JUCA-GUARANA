@@ -1204,20 +1204,80 @@ function formatDateBR(dateStr) {
 
 /**
  * Gera mensagem de confirmação do agendamento para o usuário.
+ * FIX v5.2: Inclui preço da consulta e informações de convênios.
  */
-function buildConfirmationMessage(state, doctorName, clinicName) {
-  const { preferred_date, preferred_time, patient_name } = state;
+async function buildConfirmationMessage(state, doctorName, clinicName, clinicId) {
+  const { preferred_date, preferred_time, patient_name, doctor_id } = state;
   const dateFormatted = formatDateBR(preferred_date);
   const doctor = doctorName || state.doctor_name || '[MÉDICO]';
   const clinic = clinicName || 'Clínica';
 
-  return `✅ *Confirmar agendamento?*\n\n` +
+  // Buscar preço do serviço principal do médico
+  let priceInfo = '';
+  if (doctor_id && clinicId) {
+    try {
+      const { data: dsRows } = await supabase
+        .from('doctor_services')
+        .select('custom_price, service_id, services(name, price)')
+        .eq('doctor_id', doctor_id)
+        .eq('clinic_id', clinicId)
+        .limit(5);
+      if (dsRows && dsRows.length > 0) {
+        // Usar custom_price se existir, senão price da tabela services
+        // Pegar o primeiro serviço (consulta principal)
+        const mainService = dsRows[0];
+        const price = mainService.custom_price || mainService.services?.price;
+        const serviceName = mainService.services?.name || 'Consulta';
+        if (price) {
+          const formatted = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price);
+          priceInfo = `💰 Valor: ${formatted} (${serviceName})`;
+          if (dsRows.length > 1) {
+            priceInfo += `\n   _Outros serviços disponíveis com este profissional_`;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[buildConfirmationMessage] Erro ao buscar preço:', e.message);
+    }
+  }
+
+  // Buscar informações de convênios do clinic_kb
+  let convenioInfo = '';
+  if (clinicId) {
+    try {
+      const { data: kbRows } = await supabase
+        .from('clinic_kb')
+        .select('content')
+        .eq('clinic_id', clinicId)
+        .ilike('title', '%onvênio%')
+        .limit(1);
+      if (kbRows && kbRows.length > 0 && kbRows[0].content) {
+        // Extrair só a parte relevante (ex: "Aceitamos: Unimed, Bradesco...")
+        const content = kbRows[0].content;
+        if (content.toLowerCase().includes('aceita')) {
+          convenioInfo = `🏷️ ${content.split('.')[0]}.`; // primeira frase
+        } else {
+          convenioInfo = `🏷️ ${content}`;
+        }
+      }
+    } catch (e) {
+      console.warn('[buildConfirmationMessage] Erro ao buscar convênios:', e.message);
+    }
+  }
+
+  let msg = `✅ *Confirmar agendamento?*\n\n` +
     `👤 Paciente: ${patient_name || 'não informado'}\n` +
     `👨‍⚕️ Médico: ${doctor}\n` +
     `📅 Data: ${dateFormatted}\n` +
     `🕐 Horário: ${preferred_time}\n` +
-    `🏥 Clínica: ${clinic}\n\n` +
-    `Responda *SIM* para confirmar ou *NÃO* para cancelar.`;
+    `🏥 Clínica: ${clinic}`;
+
+  if (priceInfo) msg += `\n${priceInfo}`;
+  if (convenioInfo) msg += `\n\n${convenioInfo}`;
+
+  msg += `\n\nPressione *Confirmar* para confirmar seu agendamento ou *Cancelar* para cancelar.`;
+
+  return msg;
 }
 
 // ======================================================
@@ -2526,7 +2586,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 
       } else {
         // Resposta ambígua → reenviar mensagem de confirmação
-        const ambiguousConfirmMsg = buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name);
+        const ambiguousConfirmMsg = await buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name, envelope.clinic_id);
         // CORREÇÃO 2: Salvar histórico antes de retornar
         await saveConversationTurn({
           clinicId: envelope.clinic_id,
@@ -2564,7 +2624,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
         conversation_stage: 'awaiting_confirmation',
       });
-      const confirmMsg = buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name);
+      const confirmMsg = await buildConfirmationMessage(updatedState, updatedState.doctor_name, clinicRules?.name, envelope.clinic_id);
       // CORREÇÃO 2: Salvar histórico antes de retornar
       await saveConversationTurn({
         clinicId: envelope.clinic_id,
@@ -2858,14 +2918,51 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           step = MAX_STEPS;
         } else if (forcedCall.tool === 'verificar_disponibilidade') {
           const slots = toolResult.available_slots || toolResult.slots || [];
+
+          // FIX v5.2: Filtrar horários passados no dia atual
+          const now = new Date();
+          const todayStr = now.toISOString().split('T')[0];
+          const requestedDate = forcedCall.params?.date || '';
+          let filteredSlots = slots;
+          if (requestedDate === todayStr) {
+            const currentTotalMin = now.getHours() * 60 + now.getMinutes();
+            filteredSlots = slots.filter(s => {
+              const [h, m] = (typeof s === 'string' ? s : s?.time || '').split(':').map(Number);
+              return (h * 60 + m) > currentTotalMin;
+            });
+          }
+
           // FIX 3: Resetar stuck_counter ao encontrar slots com sucesso
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-            last_suggested_slots: slots,
+            last_suggested_slots: filteredSlots,
             booking_state: BOOKING_STATES.AWAITING_SLOTS,
             stuck_counter_slots: 0,
           });
-          // Deixa o scheduling agent formatar a resposta com os slots
-          // Injetar resultado no contexto para o LLM
+
+          // FIX v5.2: Retornar horários do dia deterministicamente (segunda etapa)
+          if (filteredSlots.length > 0) {
+            const dateFormatted = formatDateBR(requestedDate);
+            const slotsStr = filteredSlots.map(s => typeof s === 'string' ? s : s?.time).join(', ');
+            const displayMsg = `🕐 Horários disponíveis em ${dateFormatted}:\n\n${slotsStr}\n\nQual horário você prefere?`;
+            await saveConversationTurn({
+              clinicId: envelope.clinic_id,
+              fromNumber: envelope.from,
+              correlationId: envelope.correlation_id,
+              userText: envelope.message_text,
+              assistantText: displayMsg,
+              intentGroup: 'scheduling',
+              intent: 'show_time_slots',
+              slots: null,
+            });
+            clearTimeout(timeoutId);
+            return res.json({
+              correlation_id: envelope.correlation_id,
+              final_message: displayMsg,
+              actions: [],
+              debug: DEBUG ? { booking_state: BOOKING_STATES.AWAITING_SLOTS, slots_count: filteredSlots.length } : undefined,
+            });
+          }
+          // Se não há slots após filtro → cai no LLM para informar
         }
       } else if (!validation.valid) {
         // CORREÇÃO 2: Avançar booking_state para COLLECTING_DATE para evitar

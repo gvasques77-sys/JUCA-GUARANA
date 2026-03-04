@@ -2099,8 +2099,8 @@ if (envelope.intent_override) {
   // FIX v5.3: Handler para botões "Esta semana" / "Próxima semana"
   if (envelope.intent_override === 'week_current' || envelope.intent_override === 'week_next') {
     const isCurrentWeek = envelope.intent_override === 'week_current';
-    const allDates = conversationState?.state_json?.last_suggested_dates || updatedState.last_suggested_dates || [];
-    const doctorDisplayName = conversationState?.state_json?.doctor_name || updatedState.doctor_name || 'Médico';
+    const allDates = conversationState?.last_suggested_dates || [];
+    const doctorDisplayName = conversationState?.doctor_name || 'Médico';
 
     // Calcular intervalo da semana
     const now = new Date();
@@ -2267,8 +2267,8 @@ if (intentoDireto) {
   // FIX v5.3: Handler "esta semana" / "próxima semana" por texto
   if (intentoDireto === 'week_current' || intentoDireto === 'week_next') {
     const isCurrentWeek = intentoDireto === 'week_current';
-    const allDates = conversationState?.state_json?.last_suggested_dates || [];
-    const doctorDisplayName = conversationState?.state_json?.doctor_name || updatedState?.doctor_name || 'Médico';
+    const allDates = conversationState?.last_suggested_dates || [];
+    const doctorDisplayName = conversationState?.doctor_name || 'Médico';
 
     const now = new Date();
     const currentDay = now.getDay();
@@ -2971,20 +2971,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         }
       } else if (toolResult?.success) {
         if (forcedCall.tool === 'buscar_proximas_datas' && toolResult?.dates?.length > 0) {
-          // FIX 3: Resetar stuck_counter ao encontrar slots com sucesso
-          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-            last_suggested_dates: toolResult.dates,
-            // CORREÇÃO 5: Salvar last_suggested_slots também
-            last_suggested_slots: toolResult.dates.flatMap(d => (d.slots || []).map(s => ({ date: d.date, time: s }))),
-            booking_state: BOOKING_STATES.COLLECTING_DATE,
-            stuck_counter_slots: 0,
-          });
-          // FIX v5.3: Pergunta "Esta semana ou Próxima semana?" com botões interativos
-          // Guardar as datas no state para uso posterior
+          // FIX v5.3: Salvar datas e slots no state para uso pelos botões "Esta semana / Próxima semana"
           await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
             last_suggested_dates: toolResult.dates,
             last_suggested_slots: toolResult.dates.flatMap(d => (d.slots || []).map(s => ({ date: d.date_iso || d.date, time: s }))),
             booking_state: BOOKING_STATES.COLLECTING_DATE,
+            stuck_counter_slots: 0,
           });
           updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
           updatedState.last_suggested_dates = toolResult.dates;

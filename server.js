@@ -1089,7 +1089,6 @@ function applyDeterministicInterceptors(state, messageText) {
   if (doctor_id && !preferred_date &&
       booking_state !== BOOKING_STATES.AWAITING_SLOTS &&
       booking_state !== BOOKING_STATES.COLLECTING_DATE && // CORREÇÃO 2: evita loop após apresentar datas
-      booking_state !== BOOKING_STATES.COLLECTING_SPECIALTY && // CORREÇÃO A: evita loop quando em COLLECTING_SPECIALTY
       booking_state !== BOOKING_STATES.CONFIRMING &&
       booking_state !== BOOKING_STATES.BOOKED) {
     return {

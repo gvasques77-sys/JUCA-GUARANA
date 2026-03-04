@@ -21,7 +21,7 @@ const supabase = createClient(
 
 // FIX 2 — Proteção contra recursão infinita em buscarProximasDatasDisponiveis
 const MAX_RECURSION_DEPTH = 3;
-const MAX_SLOTS_RETORNO   = 5;
+const MAX_SLOTS_RETORNO   = 10;  // FIX v5.3: cobrir 2 semanas para botões "Esta/Próxima semana"
 const DIAS_BUSCA_FUTURO   = 30;
 
 export const DIAS_SEMANA = {

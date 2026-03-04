@@ -51,6 +51,21 @@ const INTENCOES_DIRETAS = {
   'duvida':           'info',
   'informacao':       'info',
   'informacoes':      'info',
+  'tirar duvida':     'info',
+  'tirar uma duvida': 'info',
+  'tenho uma duvida': 'info',
+  'valor':            'info',
+  'precos':           'info',
+  'preco':            'info',
+  'valores':          'info',
+  'convenios':        'info',
+  'convenio':         'info',
+  'plano de saude':   'info',
+  'parcelamento':     'info',
+  'parcela':          'info',
+  'formas de pagamento': 'info',
+  'forma de pagamento':  'info',
+  'aceita cartao':    'info',
   'tem horario':      'check_availability',
   'tem vaga':         'check_availability',
   'horario disponivel':'check_availability',
@@ -66,6 +81,34 @@ const INTENCOES_DIRETAS = {
   'semana atual':           'week_current',
   'proxima semana':         'week_next',
   'semana que vem':         'week_next',
+}
+
+/**
+ * Detector de perguntas informativas por padrão (não exige match exato).
+ * Detecta frases como "qual o valor da consulta com psicólogo",
+ * "vocês aceitam unimed?", "parcelam em quantas vezes?", etc.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function detectInfoQuestion(text) {
+  if (!text) return false;
+  const normalized = text.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '').trim();
+  const INFO_PATTERNS = [
+    /\b(valor|preco|precos|valores|custa|custo)\b/,
+    /\b(convenio|convenios|plano|planos|unimed|bradesco|amil|sulamerica|porto seguro)\b/,
+    /\b(parcela|parcelam|parcelamento|cartao|credito|debito|pix|pagamento)\b/,
+    /\b(duracao|dura|quanto tempo|demora)\b.*\b(consulta|procedimento|atendimento|sessao)\b/,
+    /\bquanto\b.*\b(custa|cobra|sai|fica|paga)\b/,
+    /\bqual\b.*\b(valor|preco)\b/,
+    /\baceitam?\b.*\b(convenio|plano|cartao)\b/,
+    /\b(formas?|meios?)\b.*\bpagamento\b/,
+    /\bgostaria\b.*\b(saber|informac)\b/,
+    /\bquero\b.*\b(saber|informac)\b/,
+    /\b(tirar|tenho)\b.*\b(duvida|duvidas)\b/,
+  ];
+  return INFO_PATTERNS.some(p => p.test(normalized));
 }
 
 /**
@@ -87,7 +130,7 @@ function interceptarIntencaoDireta(text) {
 // ======================================================
 function resolveIntentGroup(intent) {
   const SCHEDULING_INTENTS = ['schedule_new', 'view_appointments', 'try_other_date', 'try_other_doctor', 'confirm_yes', 'confirm_no', 'week_current', 'week_next'];
-  const HANDOFF_INTENTS    = ['human_handoff'];
+  const HANDOFF_INTENTS    = ['human_handoff', 'ask_question'];
   if (SCHEDULING_INTENTS.includes(intent)) return 'scheduling';
   if (HANDOFF_INTENTS.includes(intent))    return 'other';
   return 'other';
@@ -1489,10 +1532,14 @@ ${(cs.stuck_counter?.preferred_time || 0) >= 2
   : ''}
 
 ### REGRA #6: INTERRUPÇÕES NO MEIO DO AGENDAMENTO
-Se o paciente fizer uma pergunta de informação (convênio, endereço, valores, horário da clínica):
-1. Responda objetivamente em 1-2 frases.
-2. Retome com UMA pergunta sobre o campo pendente mais prioritário.
-3. NÃO reinicie o fluxo. NÃO repita dados já coletados.
+Se o paciente fizer uma pergunta de informação (convênio, endereço, valores, horário da clínica, preço, parcelamento, duração, formas de pagamento):
+1. Responda objetivamente e com todos os detalhes relevantes usando os dados da clínica.
+2. Para perguntas sobre PREÇO: busque na lista de serviços abaixo e informe o valor. Se houver parcelamento, mencione.
+3. Para perguntas sobre CONVÊNIOS: use as informações da base de conhecimento.
+4. Para perguntas sobre DURAÇÃO: informe a duração do procedimento da lista de serviços.
+5. NO FINAL, pergunte educadamente: "Posso ajudar com mais alguma informação ou gostaria de agendar uma consulta?"
+6. NÃO force o agendamento. NÃO pergunte "com qual médico deseja agendar" a menos que o paciente demonstre interesse em agendar.
+7. Se o paciente JÁ ESTÁ num fluxo de agendamento ativo (booking_state não é IDLE), aí sim retome o campo pendente após responder a dúvida.
 
 ### REGRA #7: QUANDO PERGUNTAREM SOBRE MÉDICOS/ESPECIALIDADES
 Liste TODOS os médicos acima com suas especialidades. Depois pergunte com qual quer agendar.
@@ -1986,7 +2033,7 @@ if (previousMessages.length === 0) {
             buttons: [
               { id: 'schedule_new',      title: '\uD83D\uDCC5 Agendar consulta' },   // 19 chars
               { id: 'view_appointments', title: '\uD83D\uDCCB Meus agendamentos' },   // 20 chars
-              { id: 'human_handoff',     title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
+              { id: 'ask_question',      title: '\u2753 Tirar uma dúvida' }, // 20 chars
             ],
           },
         }],
@@ -2167,6 +2214,33 @@ if (envelope.intent_override) {
     return res.json({
       correlation_id: envelope.correlation_id,
       final_message: weekMsg,
+      actions: [],
+    });
+  }
+
+  // FIX v5.4: Handler para botão "Tirar uma dúvida"
+  if (envelope.intent_override === 'ask_question') {
+    const askMsg = `Claro! Posso te ajudar com informações sobre:\n\n` +
+      `💰 Valores das consultas e procedimentos\n` +
+      `🏷️ Convênios aceitos\n` +
+      `💳 Formas de pagamento e parcelamento\n` +
+      `⏱️ Duração dos procedimentos\n` +
+      `👨‍⚕️ Especialidades disponíveis\n\n` +
+      `O que você gostaria de saber?`;
+    await saveConversationTurn({
+      clinicId: envelope.clinic_id,
+      fromNumber: envelope.from,
+      correlationId: envelope.correlation_id,
+      userText: envelope.message_text,
+      assistantText: askMsg,
+      intentGroup: 'other',
+      intent: 'ask_question',
+      slots: null,
+    });
+    clearTimeout(timeoutId);
+    return res.json({
+      correlation_id: envelope.correlation_id,
+      final_message: askMsg,
       actions: [],
     });
   }
@@ -2361,6 +2435,18 @@ if (intentoDireto) {
   extracted = callExtract?.function?.arguments
     ? safeJsonParse(callExtract.function.arguments)
     : null;
+
+  // FIX v5.4: Se detectInfoQuestion() identifica pergunta informativa E o paciente
+  // NÃO está num fluxo de agendamento ativo → forçar intent_group = 'other'
+  // Isso impede que o scheduling agent rode e deixa o LLM responder naturalmente
+  const bookingState = conversationState?.booking_state || BOOKING_STATES.IDLE;
+  const isInfoQuery = detectInfoQuestion(envelope.message_text);
+  if (isInfoQuery && bookingState === BOOKING_STATES.IDLE && extracted) {
+    console.log(`[INFO_DETECT] Pergunta informativa detectada: "${envelope.message_text}" — forçando intent_group='other'`);
+    extracted.intent_group = 'other';
+    extracted.intent = extracted.intent || 'info_query';
+  }
+
   step++;
 }
 
@@ -2914,7 +3000,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                 buttons: [
                   { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                   { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                  { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
+                  { id: 'ask_question',     title: '\u2753 Tirar uma dúvida' },
                 ],
               },
             }],
@@ -2959,7 +3045,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                   buttons: [
                     { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                     { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
+                    { id: 'ask_question',     title: '\u2753 Tirar uma dúvida' },
                   ],
                 },
               }],
@@ -3040,7 +3126,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
                   buttons: [
                     { id: 'try_other_date',   title: '\uD83D\uDCC5 Tentar outra data' },
                     { id: 'try_other_doctor', title: '\uD83D\uDC68\u200D\u2695\uFE0F Outro médico' },
-                    { id: 'human_handoff',    title: '\uD83D\uDCAC Falar c/ atendente' }, // 20 chars
+                    { id: 'ask_question',     title: '\u2753 Tirar uma dúvida' },
                   ],
                 },
               }],

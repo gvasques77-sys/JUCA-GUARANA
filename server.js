@@ -61,6 +61,11 @@ const INTENCOES_DIRETAS = {
   'quero ver meus agendamentos': 'view_appointments',
   'minhas consultas':       'view_appointments',
   'meus horarios':          'view_appointments',
+  'esta semana':            'week_current',
+  'essa semana':            'week_current',
+  'semana atual':           'week_current',
+  'proxima semana':         'week_next',
+  'semana que vem':         'week_next',
 }
 
 /**
@@ -81,7 +86,7 @@ function interceptarIntencaoDireta(text) {
 // CAMADA 1: Helper para mapear intent → intent_group
 // ======================================================
 function resolveIntentGroup(intent) {
-  const SCHEDULING_INTENTS = ['schedule_new', 'view_appointments', 'try_other_date', 'try_other_doctor', 'confirm_yes', 'confirm_no'];
+  const SCHEDULING_INTENTS = ['schedule_new', 'view_appointments', 'try_other_date', 'try_other_doctor', 'confirm_yes', 'confirm_no', 'week_current', 'week_next'];
   const HANDOFF_INTENTS    = ['human_handoff'];
   if (SCHEDULING_INTENTS.includes(intent)) return 'scheduling';
   if (HANDOFF_INTENTS.includes(intent))    return 'other';
@@ -2090,6 +2095,81 @@ if (envelope.intent_override) {
       console.error('[VIEW_APPOINTMENTS] Erro:', viewErr);
     }
   }
+
+  // FIX v5.3: Handler para botões "Esta semana" / "Próxima semana"
+  if (envelope.intent_override === 'week_current' || envelope.intent_override === 'week_next') {
+    const isCurrentWeek = envelope.intent_override === 'week_current';
+    const allDates = conversationState?.state_json?.last_suggested_dates || updatedState.last_suggested_dates || [];
+    const doctorDisplayName = conversationState?.state_json?.doctor_name || updatedState.doctor_name || 'Médico';
+
+    // Calcular intervalo da semana
+    const now = new Date();
+    const currentDay = now.getDay(); // 0=dom, 1=seg, ...
+    let weekStart, weekEnd;
+    if (isCurrentWeek) {
+      weekStart = new Date(now);
+      weekEnd = new Date(now);
+      weekEnd.setDate(now.getDate() + (6 - currentDay)); // até sábado
+    } else {
+      weekStart = new Date(now);
+      weekStart.setDate(now.getDate() + (7 - currentDay + 1)); // próxima segunda
+      weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 5); // até sábado
+    }
+    const weekStartStr = weekStart.toISOString().split('T')[0];
+    const weekEndStr = weekEnd.toISOString().split('T')[0];
+
+    // Filtrar datas da semana escolhida
+    const weekDates = allDates.filter(d => {
+      const dateStr = d.date_iso || d.date;
+      return dateStr >= weekStartStr && dateStr <= weekEndStr;
+    });
+
+    // Filtrar horários passados no dia atual
+    const todayStr = now.toISOString().split('T')[0];
+    const currentTotalMin = now.getHours() * 60 + now.getMinutes();
+
+    let weekMsg;
+    if (weekDates.length > 0) {
+      const label = isCurrentWeek ? 'Esta semana' : 'Próxima semana';
+      weekMsg = `📅 *${doctorDisplayName}* — ${label}:\n\n`;
+      weekDates.forEach(d => {
+        let slots = d.slots || [];
+        // Filtrar horários passados no dia atual
+        if ((d.date_iso || d.date) === todayStr) {
+          slots = slots.filter(s => {
+            const [h, m] = s.split(':').map(Number);
+            return (h * 60 + m) > currentTotalMin;
+          });
+        }
+        if (slots.length > 0) {
+          const slotsFormatted = slots.slice(0, 6).join(' · ');
+          weekMsg += `📅 *${d.day_of_week}, ${d.formatted_date}*\n   ${slotsFormatted}\n\n`;
+        }
+      });
+      weekMsg += `Qual dia e horário você prefere?`;
+    } else {
+      const otherLabel = isCurrentWeek ? 'próxima semana' : 'esta semana';
+      weekMsg = `Não há horários disponíveis ${isCurrentWeek ? 'nesta' : 'na próxima'} semana. Gostaria de verificar ${otherLabel}?`;
+    }
+
+    await saveConversationTurn({
+      clinicId: envelope.clinic_id,
+      fromNumber: envelope.from,
+      correlationId: envelope.correlation_id,
+      userText: envelope.message_text,
+      assistantText: weekMsg,
+      intentGroup: 'scheduling',
+      intent: envelope.intent_override,
+      slots: null,
+    });
+    clearTimeout(timeoutId);
+    return res.json({
+      correlation_id: envelope.correlation_id,
+      final_message: weekMsg,
+      actions: [],
+    });
+  }
 }
 
 // ======================================================
@@ -2182,6 +2262,77 @@ if (intentoDireto) {
     } catch (reschedErr) {
       console.error('[RESCHEDULE-TEXT] Erro:', reschedErr);
     }
+  }
+
+  // FIX v5.3: Handler "esta semana" / "próxima semana" por texto
+  if (intentoDireto === 'week_current' || intentoDireto === 'week_next') {
+    const isCurrentWeek = intentoDireto === 'week_current';
+    const allDates = conversationState?.state_json?.last_suggested_dates || [];
+    const doctorDisplayName = conversationState?.state_json?.doctor_name || updatedState?.doctor_name || 'Médico';
+
+    const now = new Date();
+    const currentDay = now.getDay();
+    let weekStart, weekEnd;
+    if (isCurrentWeek) {
+      weekStart = new Date(now);
+      weekEnd = new Date(now);
+      weekEnd.setDate(now.getDate() + (6 - currentDay));
+    } else {
+      weekStart = new Date(now);
+      weekStart.setDate(now.getDate() + (7 - currentDay + 1));
+      weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 5);
+    }
+    const weekStartStr = weekStart.toISOString().split('T')[0];
+    const weekEndStr = weekEnd.toISOString().split('T')[0];
+
+    const weekDates = allDates.filter(d => {
+      const dateStr = d.date_iso || d.date;
+      return dateStr >= weekStartStr && dateStr <= weekEndStr;
+    });
+
+    const todayStr = now.toISOString().split('T')[0];
+    const currentTotalMin = now.getHours() * 60 + now.getMinutes();
+
+    let weekMsg;
+    if (weekDates.length > 0) {
+      const label = isCurrentWeek ? 'Esta semana' : 'Próxima semana';
+      weekMsg = `📅 *${doctorDisplayName}* — ${label}:\n\n`;
+      weekDates.forEach(d => {
+        let slots = d.slots || [];
+        if ((d.date_iso || d.date) === todayStr) {
+          slots = slots.filter(s => {
+            const [h, m] = s.split(':').map(Number);
+            return (h * 60 + m) > currentTotalMin;
+          });
+        }
+        if (slots.length > 0) {
+          const slotsFormatted = slots.slice(0, 6).join(' · ');
+          weekMsg += `📅 *${d.day_of_week}, ${d.formatted_date}*\n   ${slotsFormatted}\n\n`;
+        }
+      });
+      weekMsg += `Qual dia e horário você prefere?`;
+    } else {
+      const otherLabel = isCurrentWeek ? 'próxima semana' : 'esta semana';
+      weekMsg = `Não há horários disponíveis ${isCurrentWeek ? 'nesta' : 'na próxima'} semana. Gostaria de verificar ${otherLabel}?`;
+    }
+
+    await saveConversationTurn({
+      clinicId: envelope.clinic_id,
+      fromNumber: envelope.from,
+      correlationId: envelope.correlation_id,
+      userText: envelope.message_text,
+      assistantText: weekMsg,
+      intentGroup: 'scheduling',
+      intent: intentoDireto,
+      slots: null,
+    });
+    clearTimeout(timeoutId);
+    return res.json({
+      correlation_id: envelope.correlation_id,
+      final_message: weekMsg,
+      actions: [],
+    });
   }
 
   extracted = {
@@ -2828,29 +2979,23 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             booking_state: BOOKING_STATES.COLLECTING_DATE,
             stuck_counter_slots: 0,
           });
-          // CORREÇÃO 2: Usar a mensagem já formatada pelo schedulingService (com horários reais)
-          // Se a mensagem já vem formatada com slots, usar diretamente
-          const hasFormattedMessage = toolResult.message && toolResult.message.includes('horários disponíveis');
-          let displayMessage;
-          if (hasFormattedMessage) {
-            // Mensagem já formatada pelo schedulingService.buscarProximasDatasDisponiveis
-            displayMessage = toolResult.message;
-          } else {
-            // Fallback: formatar manualmente com slots se disponíveis
-            const dateList = toolResult.dates.slice(0, BUSCA_SLOTS_ABERTA_MAX)
-              .map(d => {
-                const slotsStr = d.slots ? d.slots.join(', ') : `${d.slots_count || '?'} horários`;
-                return `${d.day_of_week}, ${d.formatted_date} — ${slotsStr}`;
-              }).join('\n');
-            displayMessage = `📅 ${updatedState.doctor_name || 'Médico selecionado'} tem os seguintes horários disponíveis:\n\n${dateList}\n\nQual dia e horário você prefere?`;
-          }
-          // CORREÇÃO C: Salvar histórico e retornar diretamente
+          // FIX v5.3: Pergunta "Esta semana ou Próxima semana?" com botões interativos
+          // Guardar as datas no state para uso posterior
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            last_suggested_dates: toolResult.dates,
+            last_suggested_slots: toolResult.dates.flatMap(d => (d.slots || []).map(s => ({ date: d.date_iso || d.date, time: s }))),
+            booking_state: BOOKING_STATES.COLLECTING_DATE,
+          });
+          updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
+          updatedState.last_suggested_dates = toolResult.dates;
+
+          const weekMsg = `📅 *${updatedState.doctor_name || 'Médico selecionado'}*\n\nPara quando você gostaria de agendar sua consulta?`;
           await saveConversationTurn({
             clinicId: envelope.clinic_id,
             fromNumber: envelope.from,
             correlationId: envelope.correlation_id,
             userText: envelope.message_text,
-            assistantText: displayMessage,
+            assistantText: weekMsg,
             intentGroup: 'scheduling',
             intent: 'buscar_proximas_datas',
             slots: null,
@@ -2858,9 +3003,17 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           clearTimeout(timeoutId);
           return res.json({
             correlation_id: envelope.correlation_id,
-            final_message: displayMessage,
-            actions: [],
-            debug: DEBUG ? { booking_state: BOOKING_STATES.COLLECTING_DATE } : undefined,
+            final_message: weekMsg,
+            actions: [{
+              type: 'send_interactive_buttons',
+              payload: {
+                buttons: [
+                  { id: 'week_current', title: '📆 Esta semana' },
+                  { id: 'week_next',    title: '📆 Próxima semana' },
+                ],
+              },
+            }],
+            debug: DEBUG ? { booking_state: BOOKING_STATES.COLLECTING_DATE, dates_count: toolResult.dates.length } : undefined,
           });
           // Nunca chegará aqui, mas manter para compatibilidade
           decided = {
@@ -2939,11 +3092,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             stuck_counter_slots: 0,
           });
 
-          // FIX v5.2: Retornar horários do dia deterministicamente (segunda etapa)
+          // FIX v5.3: Retornar horários do dia deterministicamente com formatação melhorada
           if (filteredSlots.length > 0) {
             const dateFormatted = formatDateBR(requestedDate);
-            const slotsStr = filteredSlots.map(s => typeof s === 'string' ? s : s?.time).join(', ');
-            const displayMsg = `🕐 Horários disponíveis em ${dateFormatted}:\n\n${slotsStr}\n\nQual horário você prefere?`;
+            const slotsStr = filteredSlots.map(s => typeof s === 'string' ? s : s?.time).join(' · ');
+            const doctorDisplay = updatedState.doctor_name || 'Médico selecionado';
+            const displayMsg = `🕐 *${doctorDisplay}*\n📅 ${dateFormatted}\n\nHorários disponíveis:\n${slotsStr}\n\nQual horário você prefere?`;
             await saveConversationTurn({
               clinicId: envelope.clinic_id,
               fromNumber: envelope.from,

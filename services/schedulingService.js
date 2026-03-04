@@ -634,9 +634,11 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
         const datasDisponiveis = [];
         // Se dataInicio for fornecida, buscar a partir dela; senão, a partir de hoje
         const baseDate = dataInicio ? new Date(dataInicio + 'T12:00:00') : new Date();
+        const now = new Date(); // FIX v5.2: referência para filtrar horários passados
 
         // CORREÇÃO 1: Buscar o nome do médico para a mensagem
         let doctorName = null;
+        let doctorSpecialty = null;
         try {
             const { data: doc } = await supabase
                 .from('doctors')
@@ -644,7 +646,10 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
                 .eq('id', doctorId)
                 .eq('clinic_id', clinicId)
                 .single();
-            if (doc) doctorName = `${doc.name} (${doc.specialty})`;
+            if (doc) {
+                doctorName = `${doc.name} (${doc.specialty})`;
+                doctorSpecialty = doc.specialty;
+            }
         } catch { /* ignora erro — nome é opcional */ }
 
         for (let i = 0; i <= days; i++) {   // começa em 0 (inclui hoje se ainda há horários)
@@ -653,17 +658,28 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
             const dateStr = data.toISOString().split('T')[0];
 
             // USA A VERSÃO SIMPLES — sem fallback recursivo
-            const slots = await verificarDisponibilidadeSimples(clinicId, doctorId, dateStr);
+            let slots = await verificarDisponibilidadeSimples(clinicId, doctorId, dateStr);
+
+            // FIX v5.2: Filtrar horários que já passaram no dia atual
+            const todayStr = now.toISOString().split('T')[0];
+            if (dateStr === todayStr) {
+                const currentHour = now.getHours();
+                const currentMin = now.getMinutes();
+                const currentTotalMin = currentHour * 60 + currentMin;
+                slots = slots.filter(s => {
+                    const [h, m] = s.split(':').map(Number);
+                    return (h * 60 + m) > currentTotalMin; // só futuros
+                });
+            }
 
             if (slots.length > 0) {
-                // CORREÇÃO 1: Incluir os horários reais (não apenas a contagem)
                 datasDisponiveis.push({
                     date: dateStr,
                     date_iso: dateStr,
                     formatted_date: formatDate(dateStr),
                     day_of_week: DIAS_SEMANA[getDayOfWeek(dateStr)],
                     slots_count: slots.length,
-                    slots: slots.slice(0, 6) // máximo 6 slots por dia para não poluir
+                    slots: slots // guardar todos para uso posterior
                 });
             }
 
@@ -678,14 +694,13 @@ export async function buscarProximasDatasDisponiveis(clinicId, doctorId, days = 
             };
         }
 
-        // CORREÇÃO 1: Mensagem com horários reais para cada data
+        // FIX v5.2: Apresentação em DUAS ETAPAS — primeiro só os dias
         const nomeExibicao = doctorName || 'o médico selecionado';
-        let mensagem = `📅 ${nomeExibicao} tem os seguintes horários disponíveis:\n\n`;
-        datasDisponiveis.forEach((d) => {
-            const slotsStr = d.slots.join(', ');
-            mensagem += `${d.day_of_week}, ${d.formatted_date} — ${slotsStr}\n`;
+        let mensagem = `📅 ${nomeExibicao} atende nos seguintes dias:\n\n`;
+        datasDisponiveis.forEach((d, idx) => {
+            mensagem += `${idx + 1}. ${d.day_of_week}, ${d.formatted_date} — ${d.slots_count} horários disponíveis\n`;
         });
-        mensagem += `\nQual dia e horário você prefere?`;
+        mensagem += `\nQual dia você prefere?`;
 
         return { success: true, message: mensagem, dates: datasDisponiveis };
 

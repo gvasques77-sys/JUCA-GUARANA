@@ -40,6 +40,11 @@ const INTENCOES_DIRETAS = {
   'remarcar':         'reschedule',
   'reagendar':        'reschedule',
   'remarcar consulta':'reschedule',
+  'reagendar consulta':'reschedule',
+  'quero reagendar':  'reschedule',
+  'quero remarcar':   'reschedule',
+  'reagendar meu horario':'reschedule',
+  'quero reagendar meu horario':'reschedule',
   'cancelar':         'cancel',
   'desmarcar':        'cancel',
   'cancelar consulta':'cancel',
@@ -51,6 +56,11 @@ const INTENCOES_DIRETAS = {
   'horario disponivel':'check_availability',
   'encaixe':          'schedule_encaixe',
   'encaixar':         'schedule_encaixe',
+  'meus agendamentos':      'view_appointments',
+  'ver meus agendamentos':  'view_appointments',
+  'quero ver meus agendamentos': 'view_appointments',
+  'minhas consultas':       'view_appointments',
+  'meus horarios':          'view_appointments',
 }
 
 /**
@@ -732,19 +742,38 @@ async function mergeExtractedSlots(currentState, extractedSlots, doctors, servic
       .replace(/[^a-z0-9 ]/g, '')
       .trim();
     console.log(`[CORREÇÃO1] Buscando médico: '${doctorInput}' → normalizado: '${normalizedDoc}'`);
-    const matchingDoctor = doctors.find(d => {
+    // FIX v5.2: Usar scoring em vez de .find() para evitar falso positivo
+    // Ex: "beatriz lima" matchava "julia lima" porque "lima" é token parcial
+    let bestMatch = null;
+    let bestScore = 0;
+    for (const d of doctors) {
       const docNameNorm = d.name
         .toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .replace(/^(dr\.?|dra\.?)\s*/i, '') // remove prefixo Dr/Dra do nome no banco
+        .replace(/^(dr\.?|dra\.?)\s*/i, '')
         .replace(/[^a-z0-9 ]/g, '')
         .trim();
-      // Busca bidirecional: nome do banco contém input OU input contém parte do nome
-      return docNameNorm.includes(normalizedDoc) || normalizedDoc.includes(docNameNorm) ||
-        // Busca por qualquer token do nome (ex: 'patricia' encontra 'Dra. Patricia Almeida')
-        docNameNorm.split(' ').some(token => token.length > 2 && normalizedDoc.includes(token)) ||
-        normalizedDoc.split(' ').some(token => token.length > 2 && docNameNorm.includes(token));
-    });
+      let score = 0;
+      // Match exato (bidirecional)
+      if (docNameNorm === normalizedDoc) { score = 100; }
+      else if (docNameNorm.includes(normalizedDoc)) { score = 80; }
+      else if (normalizedDoc.includes(docNameNorm)) { score = 80; }
+      else {
+        // Scoring por tokens: contar quantos tokens do input batem com o nome do banco
+        const inputTokens = normalizedDoc.split(' ').filter(t => t.length > 2);
+        const docTokens = docNameNorm.split(' ').filter(t => t.length > 2);
+        const matchedTokens = inputTokens.filter(t => docTokens.includes(t));
+        if (matchedTokens.length > 0) {
+          // Score proporcional: mais tokens batendo = melhor match
+          score = (matchedTokens.length / Math.max(inputTokens.length, docTokens.length)) * 60;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = d;
+      }
+    }
+    const matchingDoctor = bestScore > 0 ? bestMatch : null;
     if (matchingDoctor) {
       updates.doctor_name = matchingDoctor.name;
       updates.doctor_id = matchingDoctor.id;
@@ -1279,7 +1308,7 @@ ${(cs.last_suggested_slots || []).length > 0
     : '';
 
   return `${summarySection}## IDENTIDADE
-Você é Juca, secretária virtual da clínica. Seja acolhedora, profissional e humana.
+Você é Lara, secretária virtual da clínica. Seja acolhedora, profissional e humana.
 
 ## TOM DE VOZ
 - Natural, como pessoa real
@@ -1413,7 +1442,7 @@ Se pedirem especialidade que NÃO existe na lista, diga educadamente e sugira as
 Posso confirmar? 😊"
 
 ### REGRA #10: SAUDAÇÃO INICIAL
-Se ESTÁGIO é "greeting", responda: "Olá! Sou a Juca, secretária virtual da clínica. Posso ajudar com agendamentos e informações. Como posso te ajudar hoje?"
+Se ESTÁGIO é "greeting", responda: "Olá! Sou a Lara, secretária virtual da clínica. Posso ajudar com agendamentos e informações. Como posso te ajudar hoje?"
 
 ### REGRA #11: NORMALIZAÇÃO DE DATA EM LINGUAGEM NATURAL (BUG 2 FIX)
 Quando o usuário mencionar um dia da semana (ex: "sexta", "segunda-feira", "quinta"), você DEVE:
@@ -1865,7 +1894,7 @@ if (previousMessages.length === 0) {
           actions: [{ type: 'dedup_blocked', payload: { reason: 'greeting_already_sent' } }],
         });
       }
-      const greetingMessage = 'Olá! Sou a Juca, secretária virtual da clínica. Como posso te ajudar?';
+      const greetingMessage = 'Olá! Sou a Lara, secretária virtual da clínica. Como posso te ajudar?';
       // CORREÇÃO 2: Salvar histórico antes de retornar (evita loop de greeting)
       await saveConversationTurn({
         clinicId: envelope.clinic_id,
@@ -1963,6 +1992,44 @@ if (envelope.intent_override) {
     source: 'button_override',
   };
   step = 1; // pular o step de extract_intent
+
+  // FIX v5.2: Tratar view_appointments deterministicamente
+  if (envelope.intent_override === 'view_appointments') {
+    try {
+      const appointments = await executeSchedulingTool(
+        'listar_meus_agendamentos',
+        { patient_phone: envelope.from },
+        { clinicId: envelope.clinic_id, userPhone: envelope.from }
+      );
+      let viewMsg;
+      if (appointments?.success && appointments?.appointments?.length > 0) {
+        const list = appointments.appointments.map(a => 
+          `📅 ${a.date || a.appointment_date} às ${a.time || a.start_time} — ${a.doctor_name || 'Médico'} (${a.status || 'agendado'})`
+        ).join('\n');
+        viewMsg = `Seus agendamentos:\n\n${list}\n\nDeseja remarcar, cancelar ou agendar uma nova consulta?`;
+      } else {
+        viewMsg = 'Você ainda não tem agendamentos. Gostaria de agendar uma consulta? 😊';
+      }
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: viewMsg,
+        intentGroup: 'scheduling',
+        intent: 'view_appointments',
+        slots: null,
+      });
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: viewMsg,
+        actions: [],
+      });
+    } catch (viewErr) {
+      console.error('[VIEW_APPOINTMENTS] Erro:', viewErr);
+    }
+  }
 }
 
 // ======================================================
@@ -1973,6 +2040,90 @@ const intentoDireto = interceptarIntencaoDireta(envelope.message_text);
 
 if (intentoDireto) {
   console.log(`[FIX1] Intentão direta detectada: '${envelope.message_text}' → '${intentoDireto}' (sem LLM)`);
+
+  // FIX v5.2: Tratar view_appointments por texto deterministicamente
+  if (intentoDireto === 'view_appointments') {
+    try {
+      const appointments = await executeSchedulingTool(
+        'listar_meus_agendamentos',
+        { patient_phone: envelope.from },
+        { clinicId: envelope.clinic_id, userPhone: envelope.from }
+      );
+      let viewMsg;
+      if (appointments?.success && appointments?.appointments?.length > 0) {
+        const list = appointments.appointments.map(a => 
+          `📅 ${a.date || a.appointment_date} às ${a.time || a.start_time} — ${a.doctor_name || 'Médico'} (${a.status || 'agendado'})`
+        ).join('\n');
+        viewMsg = `Seus agendamentos:\n\n${list}\n\nDeseja remarcar, cancelar ou agendar uma nova consulta?`;
+      } else {
+        viewMsg = 'Você ainda não tem agendamentos. Gostaria de agendar uma consulta? 😊';
+      }
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: viewMsg,
+        intentGroup: 'scheduling',
+        intent: 'view_appointments',
+        slots: null,
+      });
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: viewMsg,
+        actions: [],
+      });
+    } catch (viewErr) {
+      console.error('[VIEW_APPOINTMENTS-TEXT] Erro:', viewErr);
+    }
+  }
+
+  // FIX v5.2: Tratar reschedule deterministicamente — listar agendamentos primeiro
+  if (intentoDireto === 'reschedule') {
+    try {
+      const appointments = await executeSchedulingTool(
+        'listar_meus_agendamentos',
+        { patient_phone: envelope.from },
+        { clinicId: envelope.clinic_id, userPhone: envelope.from }
+      );
+      let reschedMsg;
+      if (appointments?.success && appointments?.appointments?.length > 0) {
+        const upcoming = appointments.appointments.filter(a => 
+          a.status === 'agendado' || a.status === 'scheduled' || a.status === 'confirmed'
+        );
+        if (upcoming.length > 0) {
+          const list = upcoming.map((a, i) => 
+            `${i + 1}. 📅 ${a.date || a.appointment_date} às ${a.time || a.start_time} — ${a.doctor_name || 'Médico'}`
+          ).join('\n');
+          reschedMsg = `Seus agendamentos atuais:\n\n${list}\n\nQual consulta você gostaria de reagendar?`;
+        } else {
+          reschedMsg = 'Você não tem agendamentos futuros para reagendar. Gostaria de agendar uma nova consulta? 😊';
+        }
+      } else {
+        reschedMsg = 'Você não tem agendamentos para reagendar. Gostaria de agendar uma consulta? 😊';
+      }
+      await saveConversationTurn({
+        clinicId: envelope.clinic_id,
+        fromNumber: envelope.from,
+        correlationId: envelope.correlation_id,
+        userText: envelope.message_text,
+        assistantText: reschedMsg,
+        intentGroup: 'scheduling',
+        intent: 'reschedule',
+        slots: null,
+      });
+      clearTimeout(timeoutId);
+      return res.json({
+        correlation_id: envelope.correlation_id,
+        final_message: reschedMsg,
+        actions: [],
+      });
+    } catch (reschedErr) {
+      console.error('[RESCHEDULE-TEXT] Erro:', reschedErr);
+    }
+  }
+
   extracted = {
     intent_group: intentoDireto === 'cancel' ? 'scheduling' : (intentoDireto === 'info' ? 'other' : 'scheduling'),
     intent: intentoDireto,
@@ -2464,8 +2615,8 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       });
       updatedState.booking_state = BOOKING_STATES.COLLECTING_SPECIALTY;
       console.log('[FIX4] COLLECTING_SPECIALTY: doctor_id nulo, pedindo especialidade');
-      const doctorList = doctors.map(d => `${d.name} — ${d.specialty}`).join(', ');
-      const specialtyMsg = `Qual especialidade você gostaria de agendar? Aqui estão os médicos disponíveis: ${doctorList}.`;
+      const doctorList = doctors.map(d => `• ${d.name} — ${d.specialty}`).join('\n');
+      const specialtyMsg = `Qual especialidade você gostaria de agendar?\n\nMédicos disponíveis:\n${doctorList}`;
       // CORREÇÃO 2: Salvar histórico antes de retornar
       await saveConversationTurn({
         clinicId: envelope.clinic_id,

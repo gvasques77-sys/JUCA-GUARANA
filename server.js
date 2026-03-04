@@ -2177,7 +2177,66 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           to: BOOKING_STATES.BOOKED,
           trigger: 'button_confirm_yes',
         }, envelope.clinic_id, envelope.from);
-        // Continua o flow — scheduling agent vai chamar criar_agendamento
+        // FIX v5.1: Chamar criar_agendamento DETERMINISTICAMENTE (sem depender do LLM)
+        try {
+          const agendResult = await executeSchedulingTool(
+            'criar_agendamento',
+            {
+              doctor_id: updatedState.doctor_id,
+              patient_name: updatedState.patient_name,
+              patient_phone: envelope.from,
+              data: updatedState.preferred_date_iso || updatedState.preferred_date,
+              horario: updatedState.preferred_time,
+              service_id: updatedState.service_id || null,
+              observacoes: null,
+            },
+            { clinicId: envelope.clinic_id, userPhone: envelope.from }
+          );
+          console.log('[CONFIRM] criar_agendamento result:', JSON.stringify(agendResult));
+          const successMsg = agendResult?.success
+            ? `✅ Agendamento confirmado!\n\n👤 Paciente: ${updatedState.patient_name}\n👨‍⚕️ Médico: ${updatedState.doctor_name}\n📅 Data: ${updatedState.preferred_date_iso || updatedState.preferred_date}\n🕐 Horário: ${updatedState.preferred_time}\n\nAté lá! Se precisar de algo, é só chamar. 😊`
+            : `Não foi possível concluir o agendamento: ${agendResult?.message || 'erro desconhecido'}. Tente novamente ou fale com um atendente.`;
+          // Marcar como confirmado no state
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            appointment_confirmed: agendResult?.success || false,
+          });
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: successMsg,
+            intentGroup: 'scheduling',
+            intent: 'confirm_yes',
+            slots: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: successMsg,
+            actions: [],
+            debug: DEBUG ? { agendResult } : undefined,
+          });
+        } catch (agendErr) {
+          console.error('[CONFIRM] Erro ao criar agendamento:', agendErr);
+          const errMsg = 'Houve um erro ao confirmar seu agendamento. Por favor, tente novamente ou fale com um atendente.';
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: errMsg,
+            intentGroup: 'scheduling',
+            intent: 'confirm_yes_error',
+            slots: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: errMsg,
+            actions: [],
+          });
+        }
       } else if (envelope.intent_override === 'confirm_no') {
         // Ir direto para IDLE + cancelar
         const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
@@ -2211,7 +2270,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           debug: DEBUG ? { state: newState } : undefined,
         });
       } else if (/^sim|^s$|confirmar|^ok$|^yes/.test(userSaidConfirmation)) {
-        // Usuário confirmou → avançar para BOOKED e deixar scheduling agent criar
+        // Usuário confirmou → avançar para BOOKED e criar agendamento
         const newState = await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
           booking_state: BOOKING_STATES.BOOKED,
         });
@@ -2221,7 +2280,65 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           to: BOOKING_STATES.BOOKED,
           trigger: 'user_confirmed',
         }, envelope.clinic_id, envelope.from);
-        // Continua o flow — scheduling agent vai chamar criar_agendamento
+        // FIX v5.1: Chamar criar_agendamento DETERMINISTICAMENTE (sem depender do LLM)
+        try {
+          const agendResult = await executeSchedulingTool(
+            'criar_agendamento',
+            {
+              doctor_id: updatedState.doctor_id,
+              patient_name: updatedState.patient_name,
+              patient_phone: envelope.from,
+              data: updatedState.preferred_date_iso || updatedState.preferred_date,
+              horario: updatedState.preferred_time,
+              service_id: updatedState.service_id || null,
+              observacoes: null,
+            },
+            { clinicId: envelope.clinic_id, userPhone: envelope.from }
+          );
+          console.log('[CONFIRM-TEXT] criar_agendamento result:', JSON.stringify(agendResult));
+          const successMsg = agendResult?.success
+            ? `✅ Agendamento confirmado!\n\n👤 Paciente: ${updatedState.patient_name}\n👨‍⚕️ Médico: ${updatedState.doctor_name}\n📅 Data: ${updatedState.preferred_date_iso || updatedState.preferred_date}\n🕐 Horário: ${updatedState.preferred_time}\n\nAté lá! Se precisar de algo, é só chamar. 😊`
+            : `Não foi possível concluir o agendamento: ${agendResult?.message || 'erro desconhecido'}. Tente novamente ou fale com um atendente.`;
+          await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+            appointment_confirmed: agendResult?.success || false,
+          });
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: successMsg,
+            intentGroup: 'scheduling',
+            intent: 'confirm_yes',
+            slots: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: successMsg,
+            actions: [],
+            debug: DEBUG ? { agendResult } : undefined,
+          });
+        } catch (agendErr) {
+          console.error('[CONFIRM-TEXT] Erro ao criar agendamento:', agendErr);
+          const errMsg = 'Houve um erro ao confirmar seu agendamento. Por favor, tente novamente ou fale com um atendente.';
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: errMsg,
+            intentGroup: 'scheduling',
+            intent: 'confirm_yes_error',
+            slots: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: errMsg,
+            actions: [],
+          });
+        }
 
       } else if (/^n[aã]o|^n$|cancelar|^no$/.test(userSaidConfirmation)) {
         // Usuário cancelou → resetar campos de data/hora

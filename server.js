@@ -97,6 +97,7 @@ const BOOKING_STAGES = {
 }
 const BOOKING_STATES = {
   IDLE: 'idle',
+  COLLECTING_SPECIALTY: 'collecting_specialty',
   COLLECTING_DOCTOR: 'collecting_doctor',
   COLLECTING_DATE: 'collecting_date',
   AWAITING_SLOTS: 'awaiting_slots',     // chamou verificar_disponibilidade, aguardando escolha
@@ -1088,6 +1089,7 @@ function applyDeterministicInterceptors(state, messageText) {
   if (doctor_id && !preferred_date &&
       booking_state !== BOOKING_STATES.AWAITING_SLOTS &&
       booking_state !== BOOKING_STATES.COLLECTING_DATE && // CORREÇÃO 2: evita loop após apresentar datas
+      booking_state !== BOOKING_STATES.COLLECTING_SPECIALTY && // CORREÇÃO A: evita loop quando em COLLECTING_SPECIALTY
       booking_state !== BOOKING_STATES.CONFIRMING &&
       booking_state !== BOOKING_STATES.BOOKED) {
     return {
@@ -2010,15 +2012,17 @@ await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
 
 // Se doctor_id foi resolvido agora e booking_state ainda é IDLE → avançar para COLLECTING_DATE
 if (updatedState.doctor_id && !activeConvState.doctor_id &&
-    (!updatedState.booking_state || updatedState.booking_state === BOOKING_STATES.IDLE)) {
-  console.log(`[STATE] doctor_id preenchido → transicionando para COLLECTING_DATE`);
-  await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-    booking_state: BOOKING_STATES.COLLECTING_DATE,
-  });
-  updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
+    (!updatedState.booking_state || updatedState.booking_state === BOOKING_STATES.IDLE || updatedState.booking_state === BOOKING_STATES.COLLECTING_SPECIALTY)) {
+  console.log(`[STATE] doctor_id preenchido - mantendo COLLECTING_SPECIALTY para interceptor`);
+  if (updatedState.booking_state !== BOOKING_STATES.COLLECTING_SPECIALTY) {
+    await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+      booking_state: BOOKING_STATES.COLLECTING_SPECIALTY,
+    });
+    updatedState.booking_state = BOOKING_STATES.COLLECTING_SPECIALTY;
+  }
   logDecision('state_transition', {
     from: BOOKING_STATES.IDLE,
-    to: BOOKING_STATES.COLLECTING_DATE,
+    to: BOOKING_STATES.COLLECTING_SPECIALTY,
     trigger: 'doctor_id_resolved',
     doctor_id: updatedState.doctor_id,
     doctor_name: updatedState.doctor_name,
@@ -2034,6 +2038,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
     if (!extracted || extracted.confidence < 0.6) {
       // FIX 3: Verificar se há fluxo ativo de agendamento
       const activeBookingStates = [
+        BOOKING_STATES.COLLECTING_SPECIALTY,
         BOOKING_STATES.COLLECTING_DATE,
         BOOKING_STATES.AWAITING_SLOTS,
         BOOKING_STATES.COLLECTING_TIME,
@@ -2322,13 +2327,13 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       !updatedState.specialty &&
       currentBookingStage === BOOKING_STATES.IDLE
     ) {
-      // Transicionar para COLLECTING_DATE (que aqui equivale a COLLECTING_SPECIALTY)
+      // Transicionar para COLLECTING_SPECIALTY (estado intermediário)
       await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
-        booking_state: BOOKING_STATES.COLLECTING_DATE,
+        booking_state: BOOKING_STATES.COLLECTING_SPECIALTY,
         // CORREÇÃO 5: Atualizar conversation_stage para 'scheduling'
         conversation_stage: 'scheduling',
       });
-      updatedState.booking_state = BOOKING_STATES.COLLECTING_DATE;
+      updatedState.booking_state = BOOKING_STATES.COLLECTING_SPECIALTY;
       console.log('[FIX4] COLLECTING_SPECIALTY: doctor_id nulo, pedindo especialidade');
       const doctorList = doctors.map(d => `${d.name} — ${d.specialty}`).join(', ');
       const specialtyMsg = `Qual especialidade você gostaria de agendar? Aqui estão os médicos disponíveis: ${doctorList}.`;
@@ -2499,6 +2504,25 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
               }).join('\n');
             displayMessage = `📅 ${updatedState.doctor_name || 'Médico selecionado'} tem os seguintes horários disponíveis:\n\n${dateList}\n\nQual dia e horário você prefere?`;
           }
+          // CORREÇÃO C: Salvar histórico e retornar diretamente
+          await saveConversationTurn({
+            clinicId: envelope.clinic_id,
+            fromNumber: envelope.from,
+            correlationId: envelope.correlation_id,
+            userText: envelope.message_text,
+            assistantText: displayMessage,
+            intentGroup: 'scheduling',
+            intent: 'buscar_proximas_datas',
+            slots: null,
+          });
+          clearTimeout(timeoutId);
+          return res.json({
+            correlation_id: envelope.correlation_id,
+            final_message: displayMessage,
+            actions: [],
+            debug: DEBUG ? { booking_state: BOOKING_STATES.COLLECTING_DATE } : undefined,
+          });
+          // Nunca chegará aqui, mas manter para compatibilidade
           decided = {
             decision_type: 'proceed',
             message: displayMessage,

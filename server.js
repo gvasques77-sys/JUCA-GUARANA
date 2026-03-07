@@ -1631,6 +1631,28 @@ Exemplos de mensagens compostas que você DEVE extrair completamente:
 
 Nunca descarte informações que o paciente já forneceu.
 Se o paciente já disse o médico anteriormente no histórico, não pergunte novamente.
+
+---
+
+### REGRA #13: ENCERRAMENTO E RECUSAS
+Quando o paciente disser algo que indique que NÃO quer continuar
+(exemplos: 'não obrigada', 'não preciso', 'só isso',
+'valeu', 'tchau', 'até logo', 'ok obrigado'):
+1. NUNCA repita a última informação fornecida.
+2. NUNCA ofereça novamente o serviço que foi recusado.
+3. Responda com uma despedida CURTA e CORDIAL.
+4. Exemplos de resposta adequada:
+   - "Por nada! Qualquer coisa, é só chamar. Até logo!"
+   - "Tudo bem! Estou aqui se precisar. Até mais!"
+   - "Ok! Tenha um ótimo dia!"
+5. NÃO faça novas perguntas após a despedida.
+6. Se o paciente estava no meio de um agendamento e desiste,
+   diga: "Sem problema! Se quiser retomar depois, é só chamar."
+
+ATENÇÃO: Esta regra tem PRIORIDADE sobre qualquer outra.
+Se há dúvida se o paciente quer continuar ou encerrar,
+prefira encerrar educadamente. O paciente pode voltar a
+qualquer momento enviando uma nova mensagem.
 `.trim();
 };
 
@@ -2244,6 +2266,81 @@ if (envelope.intent_override) {
       actions: [],
     });
   }
+}
+
+// ======================================================
+// INTERCEPTOR DE ENCERRAMENTO / RECUSA (CORREÇÃO #16)
+// Detecta quando o paciente recusa, agradece ou encerra
+// a conversa, evitando loop de respostas desnecessárias.
+// DEVE ser verificado ANTES do interceptor de agendamento.
+// ======================================================
+const ENCERRAMENTO_PATTERNS = [
+  // Recusas diretas
+  /^n[aã]o\s*(obrigad[ao]|,?\s*obrigad[ao])?$/i,
+  /^n[aã]o\s*(preciso|quero|desejo|necessito)/i,
+  /^n[aã]o\s*,?\s*(vlw|valeu|brigad[ao])/i,
+  // Agradecimentos de encerramento
+  /^(obrigad[ao]|brigad[ao]|vlw|valeu)\s*(!|\.)*$/i,
+  /^(muito\s+)?obrigad[ao]/i,
+  /^(agradec|thanks|thank)/i,
+  // Despedidas
+  /^(tchau|ate\s*(logo|mais|breve)|bye|flw|falou|fui)/i,
+  /^(bom\s*dia|boa\s*(tarde|noite))\s*(!|\.)*$/i,
+  // Encerramento implícito
+  /^(s[oó]\s*(isso|era\s*isso)|era\s*s[oó]\s*isso|t[aá]\s*(bom|certo|ok))/i,
+  /^(ok|beleza|blz|suave|tranquilo|perfeito)\s*(!|\.)*$/i,
+  /^(entendi|entendido|certo)\s*(!|\.)*$/i,
+  /^nada\s*(mais|n[aã]o)?$/i,
+  /^(por\s*enquanto\s*)?[eé]\s*s[oó]$/i,
+];
+
+const normalizedMsgEncerramento = envelope.message_text.trim().toLowerCase()
+  .replace(/[!?.]+$/g, '').trim();
+
+const isEncerramento = ENCERRAMENTO_PATTERNS.some(
+  pattern => pattern.test(normalizedMsgEncerramento)
+);
+
+if (isEncerramento) {
+  console.log(`[INTERCEPTOR_ENCERRAMENTO] Encerramento detectado: "${normalizedMsgEncerramento}" | booking_state: ${conversationState?.booking_state || 'idle'}`);
+
+  const shouldResetBooking = conversationState?.booking_state
+    && conversationState.booking_state !== BOOKING_STATES.IDLE
+    && conversationState.booking_state !== BOOKING_STATES.BOOKED;
+
+  const encerramentoMsg = shouldResetBooking
+    ? 'Tudo bem! Se quiser retomar o agendamento depois, é só me chamar. Até logo! 😊'
+    : 'Por nada! Se precisar de algo, é só me chamar. Até logo! 😊';
+
+  // Resetar estado da conversa
+  await updateConversationState(supabase, envelope.clinic_id, envelope.from, {
+    booking_state: BOOKING_STATES.IDLE,
+    pending_fields: [],
+    last_question_asked: null,
+    intent: null,
+    running_summary: shouldResetBooking
+      ? 'Paciente encerrou conversa durante agendamento.'
+      : 'Paciente encerrou conversa após tirar dúvida.',
+  });
+
+  await saveConversationTurn({
+    clinicId: envelope.clinic_id,
+    fromNumber: envelope.from,
+    correlationId: envelope.correlation_id,
+    userText: envelope.message_text,
+    assistantText: encerramentoMsg,
+    intentGroup: 'other',
+    intent: 'encerramento',
+    slots: null,
+  });
+
+  clearTimeout(timeoutId);
+  return res.json({
+    correlation_id: envelope.correlation_id,
+    final_message: encerramentoMsg,
+    actions: [],
+    debug: DEBUG ? { intercepted: true, type: 'encerramento', booking_reset: shouldResetBooking } : undefined,
+  });
 }
 
 // ======================================================

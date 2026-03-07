@@ -11,6 +11,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
 import { redisHealthCheck } from './services/redisService.js';
+import { getOrCreateConversation, updateConversationTurn, finalizeConversation } from './services/conversationTracker.js';
 
 // ======================================================
 // STATE MACHINE — Estados explícitos do fluxo de agendamento
@@ -460,6 +461,25 @@ async function logDecision(type, details, clinicId = null, fromNumber = null) {
       // silencioso — não crítico
     }
   }
+}
+
+// ======================================================
+// CÁLCULO DE CUSTO DE TOKENS (PONTO D — Conversation Tracking)
+// ======================================================
+
+/**
+ * Calcula custo estimado de uma chamada OpenAI baseado nos tokens.
+ * Preços do GPT-4.1 (atualizar se mudar de modelo).
+ */
+function calculateCost(promptTokens, completionTokens) {
+  // Preços do GPT-4.1 por 1M tokens (verificar se mudou)
+  const INPUT_PRICE_PER_1M = 2.00;    // USD por 1M tokens de input
+  const OUTPUT_PRICE_PER_1M = 8.00;   // USD por 1M tokens de output
+
+  const inputCost = (promptTokens / 1_000_000) * INPUT_PRICE_PER_1M;
+  const outputCost = (completionTokens / 1_000_000) * OUTPUT_PRICE_PER_1M;
+
+  return parseFloat((inputCost + outputCost).toFixed(6));
 }
 
 // ======================================================
@@ -1831,6 +1851,24 @@ app.post('/process', checkAgentAuth, async (req, res) => {
       log.debug({ doctors: doctors.length, services: services.length }, 'clinic_data_loaded');
     }
 
+    // — Conversation Tracking (ADITIVO — não altera fluxo existente) —
+    let conversationRecord = null;
+    try {
+      conversationRecord = await getOrCreateConversation(
+        supabase,
+        envelope.clinic_id,
+        envelope.from,
+        conversationState?.id || null
+      );
+    } catch (trackingError) {
+      console.warn('[ConversationTracker] Erro não-bloqueante:', trackingError.message);
+      // NÃO interrompe o fluxo — tracking é best-effort
+    }
+
+    // Acumuladores de usage da OpenAI (para tracking de custo)
+    let totalTokensInput = 0;
+    let totalTokensOutput = 0;
+
     // ======================================================
     // 4) DEFINIR TOOLS (Function Calling)
     // ======================================================
@@ -2526,6 +2564,12 @@ if (intentoDireto) {
     },
     { signal: controller.signal }
   );
+
+  // Acumular usage da chamada extract_intent
+  if (extraction.usage) {
+    totalTokensInput += extraction.usage.prompt_tokens || 0;
+    totalTokensOutput += extraction.usage.completion_tokens || 0;
+  }
 
   // Parse resultado da extração (JG-P0-002)
   const callExtract = extraction.choices[0]?.message?.tool_calls?.[0];
@@ -3371,6 +3415,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         { signal: controller.signal }
       );
 
+      // Acumular usage da chamada decide_next_action
+      if (decision.usage) {
+        totalTokensInput += decision.usage.prompt_tokens || 0;
+        totalTokensOutput += decision.usage.completion_tokens || 0;
+      }
+
       // 🔧 CORREÇÃO: acessar choices[0].message.tool_calls
       const call = decision.choices[0]?.message?.tool_calls?.[0];
       const parsedArgs = call?.function?.arguments
@@ -3450,6 +3500,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
           },
           { signal: controller.signal }
         );
+
+        // Acumular usage da chamada do scheduling agent
+        if (agentResp.usage) {
+          totalTokensInput += agentResp.usage.prompt_tokens || 0;
+          totalTokensOutput += agentResp.usage.completion_tokens || 0;
+        }
 
         const choice = agentResp.choices[0];
 
@@ -3597,6 +3653,22 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
               to: 'appointment_confirmed',
               trigger: 'criar_agendamento_success',
             }, envelope.clinic_id, envelope.from);
+
+            // — Finalizar tracking da conversa (PONTO E) —
+            if (conversationRecord) {
+              try {
+                await finalizeConversation(
+                  supabase,
+                  conversationRecord.id,
+                  'completed',
+                  'booked',
+                  toolResult.appointment_id || null,
+                  toolResult.patient_id || null
+                );
+              } catch (trackingError) {
+                console.warn('[ConversationTracker] Erro ao finalizar:', trackingError.message);
+              }
+            }
           }
 
           if (DEBUG) {
@@ -3698,6 +3770,16 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         confidence: extracted.confidence,
         decision_type: decided?.decision_type || null,
         latency_ms: Date.now() - started,
+        extra_data: {
+          // NOVOS campos de custo (PASSO 1.4)
+          tokens: {
+            input: totalTokensInput,
+            output: totalTokensOutput,
+            total: totalTokensInput + totalTokensOutput,
+          },
+          cost_usd: calculateCost(totalTokensInput, totalTokensOutput),
+          model: process.env.OPENAI_MODEL || 'gpt-4.1',
+        },
       });
     } catch (e) {
       log.warn({ err: String(e) }, 'agent_logs_insert_failed');
@@ -3743,6 +3825,19 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
       }
     } catch (stageErr) {
       log.warn({ err: String(stageErr) }, 'conversation_stage_update_failed');
+    }
+
+    // — Atualizar tracking com dados do turno (PONTO C) —
+    if (conversationRecord) {
+      try {
+        await updateConversationTurn(supabase, conversationRecord.id, {
+          tokensInput: totalTokensInput,
+          tokensOutput: totalTokensOutput,
+          costEstimated: calculateCost(totalTokensInput, totalTokensOutput),
+        });
+      } catch (trackingError) {
+        console.warn('[ConversationTracker] Erro no update de turno:', trackingError.message);
+      }
     }
 
     clearTimeout(timeoutId);

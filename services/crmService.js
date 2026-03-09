@@ -3,7 +3,10 @@
    Fire-and-forget: erros não propagam para o agente */
 
 import { createClient } from '@supabase/supabase-js';
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL || 'missing',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 'missing',
+);
 
 // ─── 1. updateLeadStage ───
 // Atualiza o estágio do lead e registra evento na timeline

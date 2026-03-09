@@ -2,7 +2,8 @@
    JUCA GUARANÁ — Secretária Inteligente
    Fire-and-forget: erros não propagam para o agente */
 
-import { supabase } from '../lib/supabase.js';
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 // ─── 1. updateLeadStage ───
 // Atualiza o estágio do lead e registra evento na timeline

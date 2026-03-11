@@ -12,6 +12,7 @@ import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
 import { redisHealthCheck } from './services/redisService.js';
 import { getOrCreateConversation, updateConversationTurn, finalizeConversation } from './services/conversationTracker.js';
+import { processPostConversation } from './services/crmService.js';
 
 
 // ======================================================
@@ -3834,7 +3835,29 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 
     clearTimeout(timeoutId);
 
-    // — CRM Hooks removido (será reimplementado como CRM V2) —
+    // — CRM V2: Fire-and-forget (não bloqueia resposta ao paciente) —
+    try {
+      let conversationOutcome = 'conversation';
+      if (updatedState?.booking_state === BOOKING_STATES.BOOKED) {
+        conversationOutcome = 'booked';
+      } else if (extracted?.intent === 'cancel' || extracted?.intent === 'confirm_no') {
+        conversationOutcome = 'cancelled';
+      } else if (extracted?.intent_group === 'info' || extracted?.intent === 'info_query') {
+        conversationOutcome = 'info_provided';
+      }
+
+      processPostConversation(
+        supabase,
+        envelope.from,
+        envelope.clinic_id,
+        conversationOutcome,
+        conversationRecord?.id || null,
+        null // appointmentId — disponível apenas nos early returns de confirmação
+      ).catch(err => console.error('[CRM] Erro no pós-processamento:', err.message));
+    } catch (crmErr) {
+      // Erro síncrono na preparação — nunca deve derrubar o agente
+      console.error('[CRM] Erro ao iniciar CRM V2:', crmErr.message);
+    }
 
     return res.json({
       correlation_id: envelope.correlation_id,

@@ -12,7 +12,7 @@ import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/schedulingTools.js';
 import { redisHealthCheck } from './services/redisService.js';
 import { getOrCreateConversation, updateConversationTurn, finalizeConversation } from './services/conversationTracker.js';
-import { processPostConversation } from './services/crmService.js';
+
 
 // ======================================================
 // STATE MACHINE — Estados explícitos do fluxo de agendamento
@@ -3855,16 +3855,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
         conversationOutcome = 'info_provided';
       }
 
-      // Chamar CRM service sem bloquear (fire-and-forget)
-      processPostConversation(
-        envelope.from,
-        envelope.clinic_id,
-        conversationOutcome,
-        updatedState?.appointment_id || null
-      ).catch(err => console.error('[CRM] Erro no pós-processamento:', err.message));
-    } catch (crmErr) {
-      console.error('[CRM] Erro ao iniciar pós-processamento:', crmErr.message);
-    }
+
 
     return res.json({
       correlation_id: envelope.correlation_id,

@@ -3235,15 +3235,6 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
             }],
             debug: DEBUG ? { booking_state: BOOKING_STATES.COLLECTING_DATE, dates_count: toolResult.dates.length } : undefined,
           });
-          // Nunca chegará aqui, mas manter para compatibilidade
-          decided = {
-            decision_type: 'proceed',
-            message: displayMessage,
-            actions: [{ type: 'log' }],
-            confidence: 1,
-          };
-          skipSchedulingAgent = true;
-          step = MAX_STEPS;
         } else if (forcedCall.tool === 'buscar_proximas_datas' && (!toolResult?.dates || toolResult.dates.length === 0)) {
           // FIX 3: buscar_proximas_datas retornou vazio — incrementar stuck_counter
           const currentStuckSlots = (updatedState.stuck_counter_slots || 0) + 1;
@@ -3843,19 +3834,7 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 
     clearTimeout(timeoutId);
 
-    // — CRM Hooks: Fire-and-forget (não bloqueia resposta) —
-    try {
-      // Determinar o outcome da conversa baseado no booking_state
-      let conversationOutcome = 'conversation'; // default
-      if (updatedState?.booking_state === BOOKING_STATES.BOOKED) {
-        conversationOutcome = 'booked';
-      } else if (updatedState?.booking_state === BOOKING_STATES.ABANDONED) {
-        conversationOutcome = 'abandoned';
-      } else if (extracted?.intent_group === 'info') {
-        conversationOutcome = 'info_provided';
-      }
-
-
+    // — CRM Hooks removido (será reimplementado como CRM V2) —
 
     return res.json({
       correlation_id: envelope.correlation_id,

@@ -13,6 +13,7 @@ import { schedulingToolsDefinitions, executeSchedulingTool } from './tools/sched
 import { redisHealthCheck } from './services/redisService.js';
 import { getOrCreateConversation, updateConversationTurn, finalizeConversation } from './services/conversationTracker.js';
 import { processPostConversation } from './services/crmService.js';
+import { startTaskProcessor } from './services/taskProcessor.js';
 
 
 // ======================================================
@@ -3907,4 +3908,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 // ======================================================
 app.listen(PORT, () => {
   log.info({ port: PORT }, '🚀 agent-service listening');
+
+  // — CRM Fase 3: Iniciar Task Processor (varredura de crm_tasks pendentes) —
+  // Fire-and-forget — se falhar, o server continua operando normalmente
+  try {
+    startTaskProcessor(supabase);
+  } catch (err) {
+    log.warn({ err: err.message }, '[TASK-PROCESSOR] Falha ao iniciar — server continua sem processor');
+  }
 });

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login — Dashboard CRM</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <style>
+    :root{--bg:#0B1120;--bg2:#111827;--card:#1A2332;--bdr:#1E3A5F;--t1:#F1F5F9;--t2:#94A3B8;--t3:#64748B;--blue:#3B82F6;--green:#10B981;--rose:#F43F5E}
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .login-container{width:100%;max-width:400px;padding:20px}
+    .login-card{background:var(--card);border:1px solid var(--bdr);border-radius:16px;padding:40px 32px;text-align:center}
+    .logo{font-size:28px;font-weight:700;color:var(--green);margin-bottom:4px}
+    .subtitle{font-size:13px;color:var(--t3);margin-bottom:32px;letter-spacing:.05em}
+    .form-group{margin-bottom:16px;text-align:left}
+    .form-group label{display:block;font-size:13px;color:var(--t2);margin-bottom:6px;font-weight:500}
+    .form-group input{width:100%;background:var(--bg2);border:1px solid var(--bdr);color:var(--t1);padding:12px 14px;border-radius:10px;font-size:14px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color .2s}
+    .form-group input:focus{border-color:var(--blue)}
+    .btn-login{width:100%;background:var(--blue);color:#fff;padding:12px;border-radius:10px;font-weight:600;font-size:15px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;margin-top:8px;transition:background .2s}
+    .btn-login:hover{background:#2563EB}
+    .btn-login:disabled{opacity:.5;cursor:not-allowed}
+    .error-msg{background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.25);color:#FDA4AF;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:16px;display:none}
+    .footer{margin-top:24px;font-size:11px;color:var(--t3)}
+    .footer a{color:var(--blue);text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="logo">Painel CRM</div>
+      <div class="subtitle">GV AUTOMA&#199;&#213;ES</div>
+
+      <div id="error" class="error-msg"></div>
+
+      <form id="loginForm" onsubmit="return handleLogin(event)">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" placeholder="seu@email.com" required autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <input type="password" id="password" placeholder="Sua senha" required autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn-login" id="btnLogin">Entrar</button>
+      </form>
+
+      <div class="footer">
+        Juca Guaran&#225; &mdash; Secretaria Virtual Inteligente
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var SUPABASE_URL = 'https://edamtnxcwuuydwwbimvz.supabase.co';
+    var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkYW10bnhjd3V1eWR3d2JpbXZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkzMTgxNDIsImV4cCI6MjA2NDg5NDE0Mn0.3bRn62p5PYjbpCe-mjmAxcidAviLqzEXi-rB7poIvhc';
+
+    var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Se já tem sessão válida, redirecionar direto
+    (async function checkSession() {
+      var { data } = await sb.auth.getSession();
+      if (data && data.session && data.session.access_token) {
+        localStorage.setItem('crm_token', data.session.access_token);
+        localStorage.setItem('crm_refresh_token', data.session.refresh_token);
+        window.location.href = '/crm/';
+      }
+    })();
+
+    function showError(msg) {
+      var el = document.getElementById('error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideError() {
+      document.getElementById('error').style.display = 'none';
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      hideError();
+
+      var email = document.getElementById('email').value.trim();
+      var password = document.getElementById('password').value;
+      var btn = document.getElementById('btnLogin');
+
+      if (!email || !password) {
+        showError('Preencha email e senha.');
+        return false;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Entrando...';
+
+      try {
+        var { data, error } = await sb.auth.signInWithPassword({ email: email, password: password });
+
+        if (error) {
+          var msg = 'Email ou senha incorretos.';
+          if (error.message.includes('Invalid login')) msg = 'Email ou senha incorretos.';
+          else if (error.message.includes('Email not confirmed')) msg = 'Email ainda n\u00e3o confirmado.';
+          else msg = error.message;
+          showError(msg);
+          btn.disabled = false;
+          btn.textContent = 'Entrar';
+          return false;
+        }
+
+        if (data && data.session) {
+          localStorage.setItem('crm_token', data.session.access_token);
+          localStorage.setItem('crm_refresh_token', data.session.refresh_token);
+          window.location.href = '/crm/';
+        } else {
+          showError('Erro inesperado ao fazer login.');
+          btn.disabled = false;
+          btn.textContent = 'Entrar';
+        }
+      } catch (err) {
+        showError('Erro de conex\u00e3o. Tente novamente.');
+        btn.disabled = false;
+        btn.textContent = 'Entrar';
+      }
+
+      return false;
+    }
+  </script>
+</body>
+</html>

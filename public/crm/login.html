@@ -59,11 +59,10 @@
     var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // Se já tem sessão válida, redirecionar direto
+    // O Supabase client persiste a sessão automaticamente no localStorage
     (async function checkSession() {
       var { data } = await sb.auth.getSession();
       if (data && data.session && data.session.access_token) {
-        localStorage.setItem('crm_token', data.session.access_token);
-        localStorage.setItem('crm_refresh_token', data.session.refresh_token);
         window.location.href = '/crm/';
       }
     })();
@@ -109,8 +108,8 @@
         }
 
         if (data && data.session) {
-          localStorage.setItem('crm_token', data.session.access_token);
-          localStorage.setItem('crm_refresh_token', data.session.refresh_token);
+          // Supabase client persiste a sessão automaticamente
+          // index.html usa sbClient.auth.getSession() para recuperar o token
           window.location.href = '/crm/';
         } else {
           showError('Erro inesperado ao fazer login.');

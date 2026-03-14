@@ -54,41 +54,67 @@ var SUPABASE_URL='https://edamtnxcwuuydwwbimvz.supabase.co';
 var SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkYW10bnhjd3V1eWR3d2JpbXZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0NDI2MzksImV4cCI6MjA4NjAxODYzOX0.uzu52-qEHatsBoQBJj145wDROcbuYSNFbSzgWDrqUeg';
 var sbClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 
-// Auth helpers
-function getToken(){return localStorage.getItem('crm_token')}
+// Auth helpers — usa sessão gerenciada pelo Supabase client
+var _currentToken=null;
+
+// Listener de auth state — mantém token atualizado automaticamente
+sbClient.auth.onAuthStateChange(function(event,session){
+  if(session&&session.access_token){
+    _currentToken=session.access_token;
+  }else{
+    _currentToken=null;
+  }
+});
+
+function getToken(){return _currentToken}
+
 function logout(){
-  localStorage.removeItem('crm_token');
-  localStorage.removeItem('crm_refresh_token');
+  _currentToken=null;
   sbClient.auth.signOut();
   window.location.href='/crm/login.html';
 }
 
-// Refresh token se expirado
+// Inicializa token a partir da sessão persistida pelo Supabase client
+async function initToken(){
+  var{data,error}=await sbClient.auth.getSession();
+  if(error||!data.session){return null}
+  _currentToken=data.session.access_token;
+  return _currentToken;
+}
+
+// Refresh token via Supabase client
 async function refreshToken(){
-  var rt=localStorage.getItem('crm_refresh_token');
-  if(!rt)return null;
   try{
-    var{data,error}=await sbClient.auth.refreshSession({refresh_token:rt});
+    var{data,error}=await sbClient.auth.refreshSession();
     if(error||!data.session)return null;
-    localStorage.setItem('crm_token',data.session.access_token);
-    localStorage.setItem('crm_refresh_token',data.session.refresh_token);
-    return data.session.access_token;
+    _currentToken=data.session.access_token;
+    return _currentToken;
   }catch(e){return null}
 }
 
 // Fetch com auth
 function q(p,o){
   var token=getToken();
-  if(!token){logout();return Promise.resolve(null)}
+  if(!token){return Promise.resolve(null)}
   var opts=o||{};
   opts.headers=Object.assign({'Authorization':'Bearer '+token,'Content-Type':'application/json'},opts.headers||{});
   return fetch(API+p,opts).then(function(r){
     if(r.status===401){
-      // Tentar refresh
+      // Tentar refresh antes de desistir
       return refreshToken().then(function(newToken){
         if(!newToken){logout();return null}
         opts.headers['Authorization']='Bearer '+newToken;
-        return fetch(API+p,opts).then(function(r2){return r2.json()}).catch(function(){return null});
+        return fetch(API+p,opts).then(function(r2){
+          if(r2.status===401||r2.status===403){logout();return null}
+          return r2.json();
+        }).catch(function(){return null});
+      });
+    }
+    if(r.status===403){
+      // 403 = usuário autenticado mas sem vínculo com clínica
+      return r.json().then(function(body){
+        console.error('[CRM] 403 em '+p+':',body.error||'acesso negado');
+        return null;
       });
     }
     return r.json();
@@ -576,13 +602,24 @@ function App(){
   var _ts=us(null),taskSum=_ts[0],sTS=_ts[1];
   var _ready=us(false),ready=_ready[0],sReady=_ready[1];
 
-  // Auth check on load
+  // Auth check on load — usa sessão do Supabase client
   ue(function(){
-    var token=getToken();
-    if(!token){logout();return}
-    q('/me').then(function(d){
-      if(!d||!d.clinicId){logout();return}
-      sU(d);sReady(true);
+    initToken().then(function(token){
+      if(!token){
+        window.location.href='/crm/login.html';
+        return;
+      }
+      q('/me').then(function(d){
+        if(!d||!d.clinicId){
+          console.error('[CRM] /me falhou — sem clinicId na resposta:', JSON.stringify(d));
+          // Não fazer logout imediato: pode ser erro de banco (clinic_users)
+          // Mostra mensagem de erro em vez de loop infinito
+          sU({error: (d&&d.error)||'Erro ao carregar dados do usuário'});
+          sReady(true);
+          return;
+        }
+        sU(d);sReady(true);
+      });
     });
   },[]);
 
@@ -597,6 +634,16 @@ function App(){
   function onOpenPatient(id,nm){sModal({id:id,n:nm})}
 
   if(!ready)return h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}},h(Ld));
+
+  // Se /me falhou (403 ou erro de banco), mostrar mensagem em vez de tela preta
+  if(user&&user.error){
+    return h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',flexDirection:'column',gap:16}},
+      h('div',{style:{fontSize:40}},'\u26A0\uFE0F'),
+      h('div',{style:{fontSize:18,fontWeight:600,color:'var(--t1)'}},'Erro de Acesso'),
+      h('div',{style:{fontSize:14,color:'var(--t2)',textAlign:'center',maxWidth:400}},user.error),
+      h('button',{className:'btn',onClick:logout,style:{marginTop:8}},'Voltar ao Login')
+    );
+  }
 
   var role=user?user.role:'staff';
   var userName=user?user.name:'';

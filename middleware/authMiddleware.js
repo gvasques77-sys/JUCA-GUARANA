@@ -6,17 +6,11 @@
  *
  * REGRAS:
  * - Retorna 401 se token ausente, inválido ou expirado
+ * - Retorna 403 se usuário não está vinculado a nenhuma clínica
  * - Busca clinic_id e role na tabela clinic_users
  * - Prefixo [AUTH] em todos os logs
+ * - Usa o mesmo supabase client passado pelo router (não cria outro)
  */
-
-import { createClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
-
-// Cliente leve para validar JWT (usa anon key internamente via getUser)
-const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // Cache simples para evitar queries repetidas à clinic_users (TTL 5 min)
 const userCache = new Map();
@@ -45,6 +39,8 @@ function setCachedUser(userId, data) {
  *   req.clinicId — UUID da clínica vinculada
  *   req.userRole — 'owner' | 'staff'
  *   req.userName — nome do usuário
+ *
+ * @param {object} supabase - Cliente Supabase (service_role) do server.js
  */
 export function authMiddleware(supabase) {
   return async function (req, res, next) {
@@ -54,18 +50,20 @@ export function authMiddleware(supabase) {
         return res.status(401).json({ error: 'Token de autenticação ausente' });
       }
 
-      const token = authHeader.slice(7);
+      const token = authHeader.slice(7).trim();
       if (!token) {
         return res.status(401).json({ error: 'Token de autenticação vazio' });
       }
 
-      // Validar JWT com Supabase Auth
-      const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+      // Validar JWT com Supabase Auth (usa o mesmo client do server.js)
+      const { data: userData, error: authError } = await supabase.auth.getUser(token);
 
-      if (authError || !user) {
-        console.warn('[AUTH] Token inválido ou expirado:', authError?.message || 'user null');
+      if (authError || !userData?.user) {
+        console.warn('[AUTH] Token inválido ou expirado:', authError?.message || 'user null', '| token prefix:', token.substring(0, 20) + '...');
         return res.status(401).json({ error: 'Token inválido ou expirado' });
       }
+
+      const user = userData.user;
 
       // Buscar dados do clinic_users (com cache)
       let clinicUser = getCachedUser(user.id);
@@ -78,7 +76,7 @@ export function authMiddleware(supabase) {
           .single();
 
         if (cuError || !data) {
-          console.warn('[AUTH] Usuário não vinculado a nenhuma clínica:', user.id);
+          console.error('[AUTH] clinic_users query falhou para user:', user.id, '| error:', cuError?.message || 'nenhum registro encontrado', '| code:', cuError?.code || 'N/A', '| details:', cuError?.details || 'N/A');
           return res.status(403).json({ error: 'Usuário não vinculado a nenhuma clínica. Contate o administrador.' });
         }
 
@@ -94,7 +92,7 @@ export function authMiddleware(supabase) {
 
       next();
     } catch (err) {
-      console.error('[AUTH] Erro inesperado no middleware:', err.message);
+      console.error('[AUTH] Erro inesperado no middleware:', err.message, err.stack);
       return res.status(500).json({ error: 'Erro interno de autenticação' });
     }
   };

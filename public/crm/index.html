@@ -7,8 +7,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.10.4/Recharts.min.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
@@ -29,778 +27,360 @@
       --accent-cyan: #06B6D4;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      min-height: 100vh;
-    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
     .mono { font-family: 'JetBrains Mono', monospace; }
-    .card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-      transition: all 0.2s;
-    }
-    .card:hover { border-color: var(--accent-blue); }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 2px 10px;
-      border-radius: 9999px;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-    }
-    .sidebar-link {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: all 0.15s;
-      text-decoration: none;
-    }
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: border-color 0.2s; }
+    .card:hover { border-color: rgba(59,130,246,0.4); }
+    .badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+    .sidebar-link { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
     .sidebar-link:hover { background: var(--bg-card); color: var(--text-primary); }
-    .sidebar-link.active {
-      background: rgba(59, 130, 246, 0.15);
-      color: var(--accent-blue);
-      border: 1px solid rgba(59, 130, 246, 0.25);
-    }
-    .table-row { transition: background 0.1s; }
+    .sidebar-link.active { background: rgba(59,130,246,0.15); color: var(--accent-blue); border-color: rgba(59,130,246,0.25); }
     .table-row:hover { background: var(--bg-card-hover); }
-    .skeleton {
-      background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
-      background-size: 200% 100%;
-      animation: shimmer 1.5s infinite;
-      border-radius: 6px;
-    }
+    .skeleton { background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 6px; height: 16px; margin-bottom: 8px; }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-    .funnel-bar { transition: width 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
     .fade-in { animation: fadeIn 0.3s ease-in; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    .btn-primary {
-      background: var(--accent-blue);
-      color: white;
-      padding: 8px 16px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 14px;
-      border: none;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .btn-primary:hover { background: #2563EB; transform: translateY(-1px); }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    input, select {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      color: var(--text-primary);
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-family: 'DM Sans', sans-serif;
-      outline: none;
-      transition: border-color 0.15s;
-    }
+    .funnel-bar { transition: width 0.6s cubic-bezier(0.25,0.46,0.45,0.94); border-radius: 6px; height: 100%; display: flex; align-items: center; padding-left: 8px; }
+    .btn-primary { background: var(--accent-blue); color: white; padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; }
+    .btn-primary:hover { background: #2563EB; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    input, select { background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); padding: 8px 12px; border-radius: 8px; font-size: 14px; font-family: 'DM Sans', sans-serif; outline: none; }
     input:focus, select:focus { border-color: var(--accent-blue); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { padding: 12px 16px; text-align: left; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    .report-text h2 { font-size: 18px; font-weight: 700; color: var(--accent-blue); margin: 16px 0 8px; }
+    .report-text h3 { font-size: 16px; font-weight: 600; margin: 12px 0 6px; }
+    .report-text p { margin: 8px 0; line-height: 1.65; color: var(--text-secondary); }
+    .report-text li { margin: 4px 0; line-height: 1.6; color: var(--text-secondary); }
+    .report-text strong { color: var(--text-primary); }
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg-primary); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    .report-content h1, .report-content h2, .report-content h3 { margin: 16px 0 8px; }
-    .report-content h2 { font-size: 18px; font-weight: 700; color: var(--accent-blue); }
-    .report-content h3 { font-size: 16px; font-weight: 600; }
-    .report-content p { margin: 8px 0; line-height: 1.65; color: var(--text-secondary); }
-    .report-content ul, .report-content ol { margin: 8px 0 8px 20px; }
-    .report-content li { margin: 4px 0; line-height: 1.6; color: var(--text-secondary); }
-    .report-content strong { color: var(--text-primary); }
+    @media (max-width: 768px) {
+      .app-layout { flex-direction: column !important; }
+      .app-sidebar { width: 100% !important; flex-direction: row !important; padding: 10px !important; overflow-x: auto; border-right: none !important; border-bottom: 1px solid var(--border) !important; }
+      .app-sidebar nav { flex-direction: row !important; gap: 4px !important; }
+      .sidebar-brand { display: none !important; }
+      .sidebar-footer { display: none !important; }
+      .app-main { padding: 16px !important; }
+      .grid-metrics { grid-template-columns: 1fr 1fr !important; }
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
+  <script type="text/babel" data-presets="es2015,react">
+    var h = React.createElement;
+    var useState = React.useState;
+    var useEffect = React.useEffect;
 
-  <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
-    const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } = Recharts;
-
-    // ======================================================
-    // CONFIG
-    // ======================================================
-    const API_BASE = '/crm/api';
-    // Em produção, usar clinic_id do login. Por enquanto, query param.
-    const getClinicId = () => {
-      const params = new URLSearchParams(window.location.search);
+    var API_BASE = '/crm/api';
+    function getClinicId() {
+      var params = new URLSearchParams(window.location.search);
       return params.get('clinic_id') || 'e229eb6c-aab3-4b48-957d-525165d175c4';
-    };
-
-    // ======================================================
-    // API HELPERS
-    // ======================================================
-    async function api(path, options = {}) {
-      try {
-        const sep = path.includes('?') ? '&' : '?';
-        const url = `${API_BASE}${path}${sep}clinic_id=${getClinicId()}`;
-        const resp = await fetch(url, options);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return await resp.json();
-      } catch (err) {
-        console.error(`[API] ${path}:`, err.message);
-        return null;
-      }
     }
 
-    // ======================================================
-    // ICONS (SVG inline)
-    // ======================================================
-    const Icons = {
-      dashboard: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
-      users: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
-      timeline: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
-      tasks: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
-      calendar: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
-      report: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
-      refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>,
-      back: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
-      search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
-    };
+    function api(path, options) {
+      var sep = path.indexOf('?') >= 0 ? '&' : '?';
+      var url = API_BASE + path + sep + 'clinic_id=' + getClinicId();
+      return fetch(url, options || {}).then(function(r) { return r.json(); }).catch(function() { return null; });
+    }
 
-    // ======================================================
-    // UTILITY COMPONENTS
-    // ======================================================
-    function MetricCard({ label, value, icon, color = 'blue', subtitle }) {
-      const colorMap = {
-        blue: 'rgba(59,130,246,0.15)', emerald: 'rgba(16,185,129,0.15)',
-        amber: 'rgba(245,158,11,0.15)', rose: 'rgba(244,63,94,0.15)',
-        violet: 'rgba(139,92,246,0.15)', cyan: 'rgba(6,182,212,0.15)',
-      };
-      const textMap = {
-        blue: '#3B82F6', emerald: '#10B981', amber: '#F59E0B',
-        rose: '#F43F5E', violet: '#8B5CF6', cyan: '#06B6D4',
-      };
-      return (
-        <div className="card fade-in">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <div style={{ background: colorMap[color], padding: 8, borderRadius: 8, color: textMap[color] }}>{icon}</div>
-            <span style={{ color: 'var(--text-muted)', fontSize: 13, fontWeight: 500 }}>{label}</span>
-          </div>
-          <div className="mono" style={{ fontSize: 28, fontWeight: 700, color: textMap[color] }}>{value}</div>
-          {subtitle && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{subtitle}</div>}
-        </div>
+    function fmtDate(d) { if (!d) return '\u2014'; try { return new Date(d).toLocaleDateString('pt-BR'); } catch(e) { return d; } }
+    function fmtDT(d) { if (!d) return '\u2014'; try { return new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); } catch(e) { return d; } }
+    function ago(d) { if (!d) return ''; var m=Math.floor((Date.now()-new Date(d).getTime())/60000); if(m<60)return m+'min'; var hr=Math.floor(m/60); if(hr<24)return hr+'h'; return Math.floor(hr/24)+'d'; }
+
+    var SL = {first_contact:'Primeiro Contato',in_triage:'Em Triagem',booking_requested:'Agend. Solicitado',booked:'Agendado',attended:'Atendido',no_show:'N\u00e3o Compareceu',follow_up:'Acompanhamento',reactivation:'Reativa\u00e7\u00e3o',returning:'Recorrente'};
+    var EL = {first_contact:'Primeiro Contato',triage_started:'Triagem',intent_detected:'Inten\u00e7\u00e3o',booking_requested:'Agend. Solicitado',booking_created:'Agend. Criado',booking_confirmed:'Agend. Confirmado',booking_canceled:'Agend. Cancelado',appointment_completed:'Consulta Realizada',no_show:'N\u00e3o Compareceu',follow_up_created:'Follow-up Criado',follow_up_completed:'Follow-up OK',reactivation_started:'Reativa\u00e7\u00e3o',returning_patient_detected:'Recorrente',conversation_ended:'Conversa Encerrada',info_requested:'Info Solicitada',note_added:'Nota',tag_added:'Tag',stage_override:'Est\u00e1gio Alterado'};
+    var EI = {first_contact:'\uD83D\uDC4B',booking_created:'\u2705',booking_confirmed:'\u2714\uFE0F',booking_canceled:'\u274C',appointment_completed:'\uD83C\uDFE5',no_show:'\u26A0\uFE0F',follow_up_created:'\uD83D\uDCDE',conversation_ended:'\uD83D\uDCAC',info_requested:'\u2753',triage_started:'\uD83D\uDD0D',intent_detected:'\uD83C\uDFAF',reactivation_started:'\uD83D\uDD04',returning_patient_detected:'\uD83D\uDD01',note_added:'\uD83D\uDCDD',tag_added:'\uD83C\uDFF7\uFE0F',stage_override:'\uD83D\uDD00',follow_up_completed:'\u2705'};
+    var TL = {reminder_24h:'\u23F0 Lembrete 24h',booking_confirmation:'\u2705 Confirma\u00e7\u00e3o',post_consultation:'\uD83D\uDCAC P\u00f3s-consulta',no_show_recovery:'\uD83D\uDD04 Recupera\u00e7\u00e3o',reactivation:'\uD83D\uDCDE Reativa\u00e7\u00e3o',custom:'\uD83D\uDCDD Personalizada'};
+
+    function Loading() { return h('div',{style:{padding:20}}, h('div',{className:'skeleton',style:{width:'60%'}}), h('div',{className:'skeleton',style:{width:'80%'}}), h('div',{className:'skeleton',style:{width:'40%'}})); }
+    function Empty(p) { return h('div',{style:{textAlign:'center',padding:40,color:'var(--text-muted)'}}, h('div',{style:{fontSize:40,marginBottom:12}},p.icon||'\uD83D\uDCED'), h('p',{style:{fontSize:14}},p.msg)); }
+
+    function MetricCard(p) {
+      var cs = {blue:'#3B82F6',emerald:'#10B981',amber:'#F59E0B',rose:'#F43F5E'};
+      var c = cs[p.color] || cs.blue;
+      return h('div',{className:'card fade-in'},
+        h('div',{style:{fontSize:13,fontWeight:500,color:'var(--text-muted)',marginBottom:8}},p.label),
+        h('div',{className:'mono',style:{fontSize:28,fontWeight:700,color:c}},p.value),
+        p.sub ? h('div',{style:{fontSize:12,color:'var(--text-muted)',marginTop:4}},p.sub) : null
       );
     }
 
-    function Loading() {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 20 }}>
-          <div className="skeleton" style={{ height: 20, width: '60%' }}></div>
-          <div className="skeleton" style={{ height: 16, width: '80%' }}></div>
-          <div className="skeleton" style={{ height: 16, width: '40%' }}></div>
-        </div>
-      );
+    function Badge(p) {
+      var bg = p.color ? p.color+'25' : 'rgba(59,130,246,0.15)';
+      var fg = p.color || '#3B82F6';
+      return h('span',{className:'badge',style:{background:bg,color:fg}}, SL[p.stage]||p.stage||'Sem est\u00e1gio');
     }
 
-    function EmptyState({ message, icon }) {
-      return (
-        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>{icon || '📭'}</div>
-          <p style={{ fontSize: 14 }}>{message}</p>
-        </div>
-      );
-    }
-
-    function StageBadge({ stage, color }) {
-      const stageLabels = {
-        first_contact: 'Primeiro Contato', in_triage: 'Em Triagem',
-        booking_requested: 'Agendamento Solicitado', booked: 'Agendado',
-        attended: 'Atendido', no_show: 'Não Compareceu',
-        follow_up: 'Acompanhamento', reactivation: 'Reativação', returning: 'Recorrente',
-      };
-      const bgColor = color ? `${color}25` : 'rgba(59,130,246,0.15)';
-      const textColor = color || '#3B82F6';
-      return (
-        <span className="badge" style={{ background: bgColor, color: textColor }}>
-          {stageLabels[stage] || stage || 'Sem estágio'}
-        </span>
-      );
-    }
-
-    function formatDate(dateStr) {
-      if (!dateStr) return '—';
-      try {
-        return new Date(dateStr).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-      } catch { return dateStr; }
-    }
-
-    function formatDateTime(dateStr) {
-      if (!dateStr) return '—';
-      try {
-        return new Date(dateStr).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-      } catch { return dateStr; }
-    }
-
-    function timeAgo(dateStr) {
-      if (!dateStr) return '';
-      const diff = Date.now() - new Date(dateStr).getTime();
-      const mins = Math.floor(diff / 60000);
-      if (mins < 60) return `${mins}min atrás`;
-      const hrs = Math.floor(mins / 60);
-      if (hrs < 24) return `${hrs}h atrás`;
-      const days = Math.floor(hrs / 24);
-      return `${days}d atrás`;
-    }
-
-    // ======================================================
-    // TELA 1: VISÃO GERAL
-    // ======================================================
+    /* ===== TELA 1 ===== */
     function OverviewPage() {
-      const [overview, setOverview] = useState(null);
-      const [funnel, setFunnel] = useState([]);
-      const [loading, setLoading] = useState(true);
+      var _o = useState(null), ov = _o[0], setOv = _o[1];
+      var _f = useState([]), fn = _f[0], setFn = _f[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      useEffect(function(){ Promise.all([api('/overview'),api('/funnel')]).then(function(r){setOv(r[0]);setFn(r[1]||[]);setLd(false);}); },[]);
+      if(ld) return h(Loading);
+      var o = ov || {};
+      var mx = 1; fn.forEach(function(s){if((s.patient_count||0)>mx) mx=s.patient_count;});
+      var fc = ['#3B82F6','#06B6D4','#8B5CF6','#10B981','#22C55E','#F59E0B','#F43F5E','#EC4899','#6366F1'];
+      return h('div',{className:'fade-in'},
+        h('h2',{style:{fontSize:22,fontWeight:700,marginBottom:20}},'Vis\u00e3o Geral'),
+        h('div',{className:'grid-metrics',style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16,marginBottom:28}},
+          h(MetricCard,{label:'Pacientes Rastreados',value:o.total_patients_tracked||0,color:'blue'}),
+          h(MetricCard,{label:'Eventos (24h)',value:o.events_last_24h||0,color:'emerald',sub:(o.total_events||0)+' total'}),
+          h(MetricCard,{label:'Tarefas Pendentes',value:o.pending_tasks||0,color:'amber'}),
+          h(MetricCard,{label:'Tarefas com Falha',value:o.failed_tasks||0,color:'rose'})
+        ),
+        h('div',{className:'card',style:{marginBottom:20}},
+          h('h3',{style:{fontSize:16,fontWeight:600,marginBottom:16}},'Funil de Jornada'),
+          fn.length===0 ? h(Empty,{msg:'Nenhum paciente no funil',icon:'\uD83D\uDCCA'}) :
+          h('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+            fn.map(function(s,i){
+              var pct = Math.max((s.patient_count/mx)*100,3);
+              var cl = s.color || fc[i%fc.length];
+              return h('div',{key:s.stage_slug,style:{display:'flex',alignItems:'center',gap:12}},
+                h('div',{style:{width:140,fontSize:13,fontWeight:500,color:'var(--text-secondary)',textAlign:'right',flexShrink:0}},s.stage_name),
+                h('div',{style:{flex:1,background:'var(--bg-secondary)',borderRadius:6,height:28,overflow:'hidden'}},
+                  h('div',{className:'funnel-bar',style:{width:pct+'%',background:cl}}, h('span',{className:'mono',style:{fontSize:12,fontWeight:600,color:'white'}},s.patient_count))
+                )
+              );
+            })
+          )
+        ),
+        o.last_event_at ? h('div',{style:{fontSize:12,color:'var(--text-muted)',textAlign:'right'}}, '\u00DAltimo evento: '+fmtDT(o.last_event_at)+' ('+ago(o.last_event_at)+')') : null
+      );
+    }
 
-      useEffect(() => {
-        Promise.all([api('/overview'), api('/funnel')]).then(([ov, fn]) => {
-          setOverview(ov);
-          setFunnel(fn || []);
-          setLoading(false);
+    /* ===== TELA 2 ===== */
+    function PatientsPage(p) {
+      var _p = useState([]), pts = _p[0], setPts = _p[1];
+      var _t = useState(0), tot = _t[0], setTot = _t[1];
+      var _s = useState([]), stg = _s[0], setStg = _s[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      var _q = useState(''), q = _q[0], setQ = _q[1];
+      var _f = useState('all'), sf = _f[0], setSf = _f[1];
+      useEffect(function(){
+        setLd(true);
+        var par = '&stage='+sf+(q?'&search='+encodeURIComponent(q):'');
+        Promise.all([api('/patients?limit=50'+par),api('/stages')]).then(function(r){
+          var d=r[0]||{}; setPts(d.patients||[]); setTot(d.total||0); setStg(r[1]||[]); setLd(false);
         });
-      }, []);
-
-      if (loading) return <Loading />;
-
-      const funnelColors = ['#3B82F6', '#06B6D4', '#8B5CF6', '#10B981', '#22C55E', '#F59E0B', '#F43F5E', '#EC4899', '#6366F1'];
-      const maxPatients = Math.max(...funnel.map(s => s.patient_count || 0), 1);
-
-      return (
-        <div className="fade-in">
-          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20 }}>Visão Geral</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 28 }}>
-            <MetricCard label="Pacientes Rastreados" value={overview?.total_patients_tracked || 0} icon={Icons.users} color="blue" />
-            <MetricCard label="Eventos (24h)" value={overview?.events_last_24h || 0} icon={Icons.timeline} color="emerald" subtitle={`${overview?.total_events || 0} total`} />
-            <MetricCard label="Tarefas Pendentes" value={overview?.pending_tasks || 0} icon={Icons.tasks} color="amber" />
-            <MetricCard label="Tarefas com Falha" value={overview?.failed_tasks || 0} icon={Icons.tasks} color="rose" />
-          </div>
-
-          <div className="card" style={{ marginBottom: 20 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>Funil de Jornada do Paciente</h3>
-            {funnel.length === 0 ? (
-              <EmptyState message="Nenhum paciente no funil ainda" icon="📊" />
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {funnel.map((stage, i) => (
-                  <div key={stage.stage_slug} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ width: 140, fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', textAlign: 'right', flexShrink: 0 }}>
-                      {stage.stage_name}
-                    </div>
-                    <div style={{ flex: 1, background: 'var(--bg-secondary)', borderRadius: 6, height: 28, overflow: 'hidden' }}>
-                      <div className="funnel-bar" style={{
-                        width: `${Math.max((stage.patient_count / maxPatients) * 100, 2)}%`,
-                        height: '100%',
-                        background: stage.color || funnelColors[i % funnelColors.length],
-                        borderRadius: 6,
-                        display: 'flex',
-                        alignItems: 'center',
-                        paddingLeft: 8,
-                      }}>
-                        <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'white' }}>{stage.patient_count}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {overview?.last_event_at && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'right' }}>
-              Último evento: {formatDateTime(overview.last_event_at)} ({timeAgo(overview.last_event_at)})
-            </div>
-          )}
-        </div>
+      },[q,sf]);
+      return h('div',{className:'fade-in'},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12}},
+          h('h2',{style:{fontSize:22,fontWeight:700}},'Pacientes CRM ',h('span',{style:{fontSize:14,color:'var(--text-muted)',fontWeight:400}},'('+tot+')')),
+          h('div',{style:{display:'flex',gap:8}},
+            h('input',{type:'text',placeholder:'Buscar...',value:q,onChange:function(e){setQ(e.target.value)},style:{width:180}}),
+            h('select',{value:sf,onChange:function(e){setSf(e.target.value)}},
+              h('option',{value:'all'},'Todos'),
+              stg.map(function(s){return h('option',{key:s.slug,value:s.slug},s.name);})
+            )
+          )
+        ),
+        ld ? h(Loading) : pts.length===0 ? h(Empty,{msg:'Nenhum paciente encontrado',icon:'\uD83D\uDC65'}) :
+        h('div',{className:'card',style:{padding:0,overflow:'auto'}},
+          h('table',null,
+            h('thead',null,h('tr',null, h('th',null,'Paciente'), h('th',null,'Est\u00e1gio'), h('th',{style:{textAlign:'center'}},'Score'), h('th',{style:{textAlign:'center'}},'Consultas'), h('th',{style:{textAlign:'right'}},'\u00DAlt. Contato'))),
+            h('tbody',null,
+              pts.map(function(pt){
+                return h('tr',{key:pt.patient_id,className:'table-row',style:{cursor:'pointer'},onClick:function(){p.onSelect(pt.patient_id,pt.patient_name)}},
+                  h('td',null, h('div',{style:{fontWeight:600}},pt.patient_name), h('div',{style:{fontSize:12,color:'var(--text-muted)'}},pt.phone)),
+                  h('td',null, h(Badge,{stage:pt.current_stage,color:pt.stage_color})),
+                  h('td',{style:{textAlign:'center'}}, h('span',{className:'mono',style:{fontWeight:600,color:(pt.lead_score||0)>=60?'#10B981':(pt.lead_score||0)>=30?'#F59E0B':'#64748B'}},pt.lead_score||0)),
+                  h('td',{style:{textAlign:'center'}}, h('span',{className:'mono'},pt.total_appointments||0), (pt.total_no_shows||0)>0?h('span',{style:{color:'#F43F5E',fontSize:11,marginLeft:4}},'('+pt.total_no_shows+' NS)'):null),
+                  h('td',{style:{textAlign:'right',color:'var(--text-muted)',fontSize:12}}, pt.last_contact_at?ago(pt.last_contact_at):'\u2014')
+                );
+              })
+            )
+          )
+        )
       );
     }
 
-    // ======================================================
-    // TELA 2: PACIENTES CRM
-    // ======================================================
-    function PatientsPage({ onSelectPatient }) {
-      const [patients, setPatients] = useState([]);
-      const [total, setTotal] = useState(0);
-      const [stages, setStages] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [search, setSearch] = useState('');
-      const [stageFilter, setStageFilter] = useState('all');
-
-      const loadPatients = useCallback(async () => {
-        setLoading(true);
-        const params = `&stage=${stageFilter}${search ? `&search=${encodeURIComponent(search)}` : ''}`;
-        const [data, stagesData] = await Promise.all([
-          api(`/patients?limit=50${params}`),
-          api('/stages'),
-        ]);
-        setPatients(data?.patients || []);
-        setTotal(data?.total || 0);
-        setStages(stagesData || []);
-        setLoading(false);
-      }, [search, stageFilter]);
-
-      useEffect(() => { loadPatients(); }, [loadPatients]);
-
-      return (
-        <div className="fade-in">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 700 }}>Pacientes CRM <span style={{ fontSize: 14, color: 'var(--text-muted)', fontWeight: 400 }}>({total})</span></h2>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div style={{ position: 'relative' }}>
-                <input type="text" placeholder="Buscar paciente..." value={search} onChange={e => setSearch(e.target.value)}
-                  style={{ paddingLeft: 32, width: 200 }} />
-                <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>{Icons.search}</div>
-              </div>
-              <select value={stageFilter} onChange={e => setStageFilter(e.target.value)}>
-                <option value="all">Todos os estágios</option>
-                {stages.map(s => <option key={s.slug} value={s.slug}>{s.name}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {loading ? <Loading /> : patients.length === 0 ? (
-            <EmptyState message="Nenhum paciente encontrado" icon="👥" />
-          ) : (
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '12px 16px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600 }}>Paciente</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600 }}>Estágio</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600 }}>Lead Score</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600 }}>Consultas</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 600 }}>Último Contato</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {patients.map(p => (
-                    <tr key={p.patient_id} className="table-row" style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                      onClick={() => onSelectPatient(p.patient_id, p.patient_name)}>
-                      <td style={{ padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600 }}>{p.patient_name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.phone}</div>
-                      </td>
-                      <td style={{ padding: '12px 16px' }}><StageBadge stage={p.current_stage} color={p.stage_color} /></td>
-                      <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                        <span className="mono" style={{ fontWeight: 600, color: p.lead_score >= 60 ? '#10B981' : p.lead_score >= 30 ? '#F59E0B' : '#64748B' }}>
-                          {p.lead_score || 0}
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                        <span className="mono">{p.total_appointments || 0}</span>
-                        {(p.total_no_shows || 0) > 0 && <span style={{ color: '#F43F5E', fontSize: 11, marginLeft: 4 }}>({p.total_no_shows} NS)</span>}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 12 }}>
-                        {p.last_contact_at ? timeAgo(p.last_contact_at) : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+    /* ===== TELA 3 ===== */
+    function TimelinePage(p) {
+      var _e = useState([]), ev = _e[0], setEv = _e[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      useEffect(function(){ api('/patients/'+p.pid+'/timeline').then(function(d){setEv(d||[]);setLd(false);}); },[p.pid]);
+      return h('div',{className:'fade-in'},
+        h('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
+          h('button',{onClick:p.onBack,style:{background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:18}},'\u2190'),
+          h('h2',{style:{fontSize:22,fontWeight:700}},'Timeline \u2014 '+p.pname)
+        ),
+        ld ? h(Loading) : ev.length===0 ? h(Empty,{msg:'Nenhum evento registrado',icon:'\uD83D\uDCED'}) :
+        h('div',{style:{paddingLeft:24,position:'relative'}},
+          h('div',{style:{position:'absolute',left:9,top:0,bottom:0,width:2,background:'var(--border)'}}),
+          ev.map(function(e,i){
+            return h('div',{key:e.event_id||i,className:'card',style:{marginBottom:12,marginLeft:20,position:'relative'}},
+              h('div',{style:{position:'absolute',left:-32,top:20,width:20,height:20,borderRadius:'50%',background:'var(--bg-card)',border:'2px solid var(--accent-blue)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10}}, EI[e.event_type]||'\uD83D\uDCCC'),
+              h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8}},
+                h('div',null, h('div',{style:{fontWeight:600,fontSize:14}},EL[e.event_type]||e.event_type), h('div',{style:{fontSize:12,color:'var(--text-muted)',marginTop:2}},'via '+e.source_system)),
+                h('div',{style:{fontSize:12,color:'var(--text-muted)',whiteSpace:'nowrap'}},fmtDT(e.occurred_at))
+              ),
+              e.payload && Object.keys(e.payload).length>0 ? h('div',{className:'mono',style:{fontSize:11,color:'var(--text-muted)',marginTop:8,padding:8,background:'var(--bg-secondary)',borderRadius:6,wordBreak:'break-all'}},JSON.stringify(e.payload)) : null
+            );
+          })
+        )
       );
     }
 
-    // ======================================================
-    // TELA 3: TIMELINE DO PACIENTE
-    // ======================================================
-    function TimelinePage({ patientId, patientName, onBack }) {
-      const [events, setEvents] = useState([]);
-      const [loading, setLoading] = useState(true);
-
-      useEffect(() => {
-        api(`/patients/${patientId}/timeline`).then(data => {
-          setEvents(data || []);
-          setLoading(false);
-        });
-      }, [patientId]);
-
-      const eventIcons = {
-        first_contact: '👋', triage_started: '🔍', intent_detected: '🎯',
-        booking_requested: '📋', booking_created: '✅', booking_confirmed: '✔️',
-        booking_canceled: '❌', appointment_completed: '🏥', no_show: '⚠️',
-        follow_up_created: '📞', follow_up_completed: '✅', reactivation_started: '🔄',
-        returning_patient_detected: '🔁', conversation_ended: '💬', info_requested: '❓',
-        note_added: '📝', tag_added: '🏷️', stage_override: '🔀',
-      };
-
-      const eventLabels = {
-        first_contact: 'Primeiro Contato', triage_started: 'Triagem Iniciada',
-        intent_detected: 'Intenção Detectada', booking_requested: 'Agendamento Solicitado',
-        booking_created: 'Agendamento Criado', booking_confirmed: 'Agendamento Confirmado',
-        booking_canceled: 'Agendamento Cancelado', appointment_completed: 'Consulta Realizada',
-        no_show: 'Não Compareceu', follow_up_created: 'Follow-up Criado',
-        follow_up_completed: 'Follow-up Realizado', reactivation_started: 'Reativação Iniciada',
-        returning_patient_detected: 'Paciente Recorrente', conversation_ended: 'Conversa Encerrada',
-        info_requested: 'Informação Solicitada', note_added: 'Nota Adicionada',
-        tag_added: 'Tag Adicionada', stage_override: 'Estágio Alterado',
-      };
-
-      return (
-        <div className="fade-in">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-            <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex' }}>{Icons.back}</button>
-            <h2 style={{ fontSize: 22, fontWeight: 700 }}>Timeline — {patientName}</h2>
-          </div>
-
-          {loading ? <Loading /> : events.length === 0 ? (
-            <EmptyState message="Nenhum evento registrado para este paciente" icon="📭" />
-          ) : (
-            <div style={{ position: 'relative', paddingLeft: 24 }}>
-              <div style={{ position: 'absolute', left: 9, top: 0, bottom: 0, width: 2, background: 'var(--border)' }}></div>
-              {events.map((ev, i) => (
-                <div key={ev.event_id || i} className="card" style={{ marginBottom: 12, marginLeft: 20, position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: -32, top: 20, width: 20, height: 20, borderRadius: '50%', background: 'var(--bg-card)', border: '2px solid var(--accent-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
-                    {eventIcons[ev.event_type] || '📌'}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{eventLabels[ev.event_type] || ev.event_type}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>via {ev.source_system}</div>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDateTime(ev.occurred_at)}</div>
-                  </div>
-                  {ev.payload && Object.keys(ev.payload).length > 0 && (
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 6, wordBreak: 'break-all' }}>
-                      {JSON.stringify(ev.payload)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // ======================================================
-    // TELA 4: TAREFAS PENDENTES
-    // ======================================================
+    /* ===== TELA 4 ===== */
     function TasksPage() {
-      const [tasks, setTasks] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [statusFilter, setStatusFilter] = useState('pending');
-
-      useEffect(() => {
-        api(`/tasks?status=${statusFilter}`).then(data => {
-          setTasks(data || []);
-          setLoading(false);
-        });
-      }, [statusFilter]);
-
-      const taskLabels = {
-        reminder_24h: '⏰ Lembrete 24h', booking_confirmation: '✅ Confirmação',
-        post_consultation: '💬 Pós-consulta', no_show_recovery: '🔄 Recuperação No-show',
-        reactivation: '📞 Reativação', custom: '📝 Personalizada',
-      };
-
-      const isOverdue = (dueAt) => new Date(dueAt) < new Date();
-
-      return (
-        <div className="fade-in">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 700 }}>Tarefas</h2>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="pending">Pendentes</option>
-              <option value="completed">Concluídas</option>
-              <option value="failed">Com Falha</option>
-              <option value="skipped">Puladas</option>
-              <option value="all">Todas</option>
-            </select>
-          </div>
-
-          {loading ? <Loading /> : tasks.length === 0 ? (
-            <EmptyState message={`Nenhuma tarefa ${statusFilter === 'all' ? '' : statusFilter}`} icon="✅" />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {tasks.map(t => (
-                <div key={t.id || t.task_id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                  <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{taskLabels[t.task_type] || t.task_type}</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{t.patient_name || 'Paciente'} • {t.patient_phone || ''}</div>
-                    {t.reason && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{t.reason}</div>}
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 12, color: isOverdue(t.due_at) ? '#F43F5E' : 'var(--text-muted)', fontWeight: isOverdue(t.due_at) ? 600 : 400 }}>
-                      {isOverdue(t.due_at) ? '⚠️ Atrasada' : ''} {formatDateTime(t.due_at)}
-                    </div>
-                    {t.retry_count > 0 && (
-                      <div style={{ fontSize: 11, color: '#F59E0B', marginTop: 2 }}>Tentativa {t.retry_count}/3</div>
-                    )}
-                    {t.last_error && (
-                      <div style={{ fontSize: 11, color: '#F43F5E', marginTop: 2, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {t.last_error}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      var _t = useState([]), tk = _t[0], setTk = _t[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      var _f = useState('pending'), sf = _f[0], setSf = _f[1];
+      useEffect(function(){ setLd(true); api('/tasks?status='+sf).then(function(d){setTk(d||[]);setLd(false);}); },[sf]);
+      return h('div',{className:'fade-in'},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12}},
+          h('h2',{style:{fontSize:22,fontWeight:700}},'Tarefas'),
+          h('select',{value:sf,onChange:function(e){setSf(e.target.value)}},
+            h('option',{value:'pending'},'Pendentes'), h('option',{value:'completed'},'Conclu\u00eddas'),
+            h('option',{value:'failed'},'Com Falha'), h('option',{value:'skipped'},'Puladas'), h('option',{value:'all'},'Todas'))
+        ),
+        ld ? h(Loading) : tk.length===0 ? h(Empty,{msg:'Nenhuma tarefa '+sf,icon:'\u2705'}) :
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+          tk.map(function(t){
+            var od = new Date(t.due_at)<new Date();
+            return h('div',{key:t.id||t.task_id,className:'card',style:{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}},
+              h('div',{style:{flex:1,minWidth:200}},
+                h('div',{style:{fontWeight:600,fontSize:14}},TL[t.task_type]||t.task_type),
+                h('div',{style:{fontSize:13,color:'var(--text-secondary)',marginTop:2}},(t.patient_name||'Paciente')+' \u2022 '+(t.patient_phone||'')),
+                t.reason?h('div',{style:{fontSize:12,color:'var(--text-muted)',marginTop:2}},t.reason):null
+              ),
+              h('div',{style:{textAlign:'right'}},
+                h('div',{style:{fontSize:12,color:od?'#F43F5E':'var(--text-muted)',fontWeight:od?600:400}},(od?'\u26A0\uFE0F ':'')+fmtDT(t.due_at)),
+                t.retry_count>0?h('div',{style:{fontSize:11,color:'#F59E0B',marginTop:2}},'Tentativa '+t.retry_count+'/3'):null
+              )
+            );
+          })
+        )
       );
     }
 
-    // ======================================================
-    // TELA 5: AGENDA DO DIA
-    // ======================================================
+    /* ===== TELA 5 ===== */
     function AgendaPage() {
-      const [agenda, setAgenda] = useState({ today: [], upcoming: [] });
-      const [loading, setLoading] = useState(true);
-
-      useEffect(() => {
-        api('/agenda/today').then(data => {
-          setAgenda(data || { today: [], upcoming: [] });
-          setLoading(false);
-        });
-      }, []);
-
-      const statusColors = {
-        scheduled: '#3B82F6', confirmed: '#10B981', completed: '#22C55E',
-        cancelled: '#F43F5E', no_show: '#F59E0B',
-      };
-      const statusLabels = {
-        scheduled: 'Agendado', confirmed: 'Confirmado', completed: 'Atendido',
-        cancelled: 'Cancelado', no_show: 'No-show',
-      };
-
-      return (
-        <div className="fade-in">
-          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20 }}>
-            Agenda do Dia — {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-          </h2>
-
-          {loading ? <Loading /> : (
-            <>
-              <div className="card" style={{ marginBottom: 20 }}>
-                <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Consultas de Hoje ({agenda.today.length})</h3>
-                {agenda.today.length === 0 ? (
-                  <EmptyState message="Nenhuma consulta agendada para hoje" icon="📅" />
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {agenda.today.map((a, i) => (
-                      <div key={a.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: i < agenda.today.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                        <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent-blue)', width: 60, flexShrink: 0 }}>
-                          {a.start_time?.substring(0, 5)}
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: 14 }}>{a.patient_name}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{a.doctor_name} • {a.service_name}</div>
-                        </div>
-                        <span className="badge" style={{ background: `${statusColors[a.status] || '#3B82F6'}25`, color: statusColors[a.status] || '#3B82F6' }}>
-                          {statusLabels[a.status] || a.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="card">
-                <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Próximos Agendamentos ({agenda.upcoming.length})</h3>
-                {agenda.upcoming.length === 0 ? (
-                  <EmptyState message="Nenhum agendamento futuro" icon="📋" />
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {agenda.upcoming.slice(0, 10).map((a, i) => (
-                      <div key={a.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                        <div style={{ width: 80, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 }}>
-                          {formatDate(a.appointment_date)}
-                        </div>
-                        <div className="mono" style={{ width: 50, fontSize: 13, fontWeight: 600, color: 'var(--accent-cyan)', flexShrink: 0 }}>
-                          {a.start_time?.substring(0, 5)}
-                        </div>
-                        <div style={{ flex: 1, fontSize: 13 }}>{a.patient_name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{a.doctor_name}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+      var _a = useState({today:[],upcoming:[]}), ag = _a[0], setAg = _a[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      useEffect(function(){ api('/agenda/today').then(function(d){setAg(d||{today:[],upcoming:[]});setLd(false);}); },[]);
+      var sc = {scheduled:'#3B82F6',confirmed:'#10B981',completed:'#22C55E',cancelled:'#F43F5E',no_show:'#F59E0B'};
+      var sl = {scheduled:'Agendado',confirmed:'Confirmado',completed:'Atendido',cancelled:'Cancelado',no_show:'No-show'};
+      var hj = new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'});
+      return h('div',{className:'fade-in'},
+        h('h2',{style:{fontSize:22,fontWeight:700,marginBottom:20}},'Agenda \u2014 '+hj),
+        ld ? h(Loading) :
+        h('div',null,
+          h('div',{className:'card',style:{marginBottom:20}},
+            h('h3',{style:{fontSize:16,fontWeight:600,marginBottom:12}},'Consultas Hoje ('+ag.today.length+')'),
+            ag.today.length===0 ? h(Empty,{msg:'Nenhuma consulta hoje',icon:'\uD83D\uDCC5'}) :
+            ag.today.map(function(a,i){
+              var c = sc[a.status]||'#3B82F6';
+              return h('div',{key:a.id||i,style:{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<ag.today.length-1?'1px solid var(--border)':'none'}},
+                h('div',{className:'mono',style:{fontSize:16,fontWeight:700,color:'var(--accent-blue)',width:60,flexShrink:0}},(a.start_time||'').substring(0,5)),
+                h('div',{style:{flex:1}}, h('div',{style:{fontWeight:600,fontSize:14}},a.patient_name), h('div',{style:{fontSize:12,color:'var(--text-muted)'}},a.doctor_name+' \u2022 '+a.service_name)),
+                h('span',{className:'badge',style:{background:c+'25',color:c}},sl[a.status]||a.status)
+              );
+            })
+          ),
+          h('div',{className:'card'},
+            h('h3',{style:{fontSize:16,fontWeight:600,marginBottom:12}},'Pr\u00f3ximos ('+ag.upcoming.length+')'),
+            ag.upcoming.length===0 ? h(Empty,{msg:'Nenhum agendamento futuro',icon:'\uD83D\uDCCB'}) :
+            ag.upcoming.slice(0,10).map(function(a,i){
+              return h('div',{key:a.id||i,style:{display:'flex',alignItems:'center',gap:12,padding:'8px 0',borderBottom:'1px solid var(--border)'}},
+                h('div',{style:{width:80,fontSize:12,color:'var(--text-muted)',flexShrink:0}},fmtDate(a.appointment_date)),
+                h('div',{className:'mono',style:{width:50,fontSize:13,fontWeight:600,color:'var(--accent-cyan)',flexShrink:0}},(a.start_time||'').substring(0,5)),
+                h('div',{style:{flex:1,fontSize:13}},a.patient_name),
+                h('div',{style:{fontSize:12,color:'var(--text-muted)'}},a.doctor_name)
+              );
+            })
+          )
+        )
       );
     }
 
-    // ======================================================
-    // TELA 6: RELATÓRIO INTELIGENTE
-    // ======================================================
+    /* ===== TELA 6 ===== */
     function ReportPage() {
-      const [report, setReport] = useState(null);
-      const [history, setHistory] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [generating, setGenerating] = useState(false);
-
-      useEffect(() => {
-        Promise.all([api('/reports/latest'), api('/reports')]).then(([latest, hist]) => {
-          setReport(latest?.report || null);
-          setHistory(hist || []);
-          setLoading(false);
-        });
-      }, []);
-
-      const handleGenerate = async () => {
-        setGenerating(true);
-        const result = await api('/reports/generate', { method: 'POST' });
-        if (result?.report) {
-          setReport(result.report);
-          // Refresh history
-          const hist = await api('/reports');
-          setHistory(hist || []);
-        }
-        setGenerating(false);
-      };
-
-      // Converter markdown-like text para React elements
-      function renderAnalysis(text) {
-        if (!text) return null;
-        return text.split('\n').map((line, i) => {
-          if (line.startsWith('## ')) return <h2 key={i}>{line.slice(3)}</h2>;
-          if (line.startsWith('### ')) return <h3 key={i}>{line.slice(4)}</h3>;
-          if (line.startsWith('**') && line.endsWith('**')) return <h3 key={i}>{line.slice(2, -2)}</h3>;
-          if (line.startsWith('- ')) return <li key={i}>{line.slice(2)}</li>;
-          if (line.trim() === '') return <br key={i} />;
-          return <p key={i}>{line}</p>;
+      var _r = useState(null), rpt = _r[0], setRpt = _r[1];
+      var _l = useState(true), ld = _l[0], setLd = _l[1];
+      var _g = useState(false), gen = _g[0], setGen = _g[1];
+      useEffect(function(){ api('/reports/latest').then(function(d){setRpt(d&&d.report?d.report:null);setLd(false);}); },[]);
+      function doGen(){ setGen(true); api('/reports/generate',{method:'POST'}).then(function(d){if(d&&d.report)setRpt(d.report);setGen(false);}); }
+      function renderTxt(txt){
+        if(!txt)return null;
+        return txt.split('\n').map(function(ln,i){
+          if(ln.indexOf('## ')===0)return h('h2',{key:i},ln.slice(3));
+          if(ln.indexOf('### ')===0)return h('h3',{key:i},ln.slice(4));
+          if(ln.indexOf('- ')===0)return h('li',{key:i},ln.slice(2));
+          if(ln.trim()==='')return h('br',{key:i});
+          return h('p',{key:i},ln);
         });
       }
-
-      return (
-        <div className="fade-in">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 700 }}>Relatório Inteligente</h2>
-            <button className="btn-primary" onClick={handleGenerate} disabled={generating} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {Icons.refresh}
-              {generating ? 'Gerando...' : 'Gerar Novo Relatório'}
-            </button>
-          </div>
-
-          {loading ? <Loading /> : (
-            <>
-              {report ? (
-                <div className="card" style={{ marginBottom: 20 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-                    <div>
-                      <span className="badge" style={{ background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
-                        {report.report_type === 'weekly' ? 'Semanal' : report.report_type}
-                      </span>
-                      <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
-                        {formatDate(report.period_start)} — {formatDate(report.period_end)}
-                      </span>
-                    </div>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      Gerado em {formatDateTime(report.created_at)}
-                    </span>
-                  </div>
-                  <div className="report-content">
-                    {renderAnalysis(report.analysis_text)}
-                  </div>
-                  {report.tokens_used > 0 && (
-                    <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 16 }}>
-                      <span>Modelo: {report.model_used}</span>
-                      <span>Tokens: {report.tokens_used}</span>
-                      <span>Custo: ${report.cost_estimated}</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="card" style={{ marginBottom: 20 }}>
-                  <EmptyState message='Nenhum relatório gerado ainda. Clique em "Gerar Novo Relatório" para começar.' icon="📊" />
-                </div>
-              )}
-
-              {history.length > 1 && (
-                <div className="card">
-                  <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Histórico de Relatórios</h3>
-                  {history.map((r, i) => (
-                    <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none', fontSize: 13, color: 'var(--text-secondary)' }}>
-                      <span>{r.report_type === 'weekly' ? 'Semanal' : r.report_type} — {formatDate(r.period_start)} a {formatDate(r.period_end)}</span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{formatDateTime(r.created_at)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+      return h('div',{className:'fade-in'},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12}},
+          h('h2',{style:{fontSize:22,fontWeight:700}},'Relat\u00f3rio Inteligente'),
+          h('button',{className:'btn-primary',onClick:doGen,disabled:gen},gen?'Gerando...':'\uD83D\uDD04 Gerar Relat\u00f3rio')
+        ),
+        ld ? h(Loading) :
+        rpt ? h('div',{className:'card'},
+          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}},
+            h('div',null,
+              h('span',{className:'badge',style:{background:'rgba(16,185,129,0.15)',color:'#10B981'}},rpt.report_type==='weekly'?'Semanal':rpt.report_type),
+              h('span',{style:{fontSize:12,color:'var(--text-muted)',marginLeft:8}},fmtDate(rpt.period_start)+' \u2014 '+fmtDate(rpt.period_end))
+            ),
+            h('span',{style:{fontSize:11,color:'var(--text-muted)'}},'Gerado: '+fmtDT(rpt.created_at))
+          ),
+          h('div',{className:'report-text'},renderTxt(rpt.analysis_text)),
+          rpt.tokens_used>0?h('div',{style:{marginTop:16,paddingTop:12,borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)'}},'Modelo: '+rpt.model_used+' | Tokens: '+rpt.tokens_used+' | Custo: $'+rpt.cost_estimated):null
+        ) :
+        h('div',{className:'card'}, h(Empty,{msg:'Nenhum relat\u00f3rio gerado. Clique em "Gerar Relat\u00f3rio".',icon:'\uD83D\uDCCA'}))
       );
     }
 
-    // ======================================================
-    // APP PRINCIPAL — Layout com Sidebar
-    // ======================================================
+    /* ===== APP ===== */
     function App() {
-      const [page, setPage] = useState('overview');
-      const [selectedPatient, setSelectedPatient] = useState(null);
-
-      const handleSelectPatient = (id, name) => {
-        setSelectedPatient({ id, name });
-        setPage('timeline');
-      };
-
-      const navItems = [
-        { id: 'overview', label: 'Visão Geral', icon: Icons.dashboard },
-        { id: 'patients', label: 'Pacientes', icon: Icons.users },
-        { id: 'tasks', label: 'Tarefas', icon: Icons.tasks },
-        { id: 'agenda', label: 'Agenda', icon: Icons.calendar },
-        { id: 'report', label: 'Relatório', icon: Icons.report },
+      var _p = useState('overview'), pg = _p[0], setPg = _p[1];
+      var _s = useState(null), sel = _s[0], setSel = _s[1];
+      function onSel(id,nm){ setSel({id:id,name:nm}); setPg('timeline'); }
+      var nav = [
+        {id:'overview',label:'Vis\u00e3o Geral',icon:'\uD83D\uDCCA'},
+        {id:'patients',label:'Pacientes',icon:'\uD83D\uDC65'},
+        {id:'tasks',label:'Tarefas',icon:'\u2705'},
+        {id:'agenda',label:'Agenda',icon:'\uD83D\uDCC5'},
+        {id:'report',label:'Relat\u00f3rio',icon:'\uD83D\uDCDD'}
       ];
-
-      function renderPage() {
-        switch (page) {
-          case 'overview': return <OverviewPage />;
-          case 'patients': return <PatientsPage onSelectPatient={handleSelectPatient} />;
-          case 'timeline': return selectedPatient ? <TimelinePage patientId={selectedPatient.id} patientName={selectedPatient.name} onBack={() => setPage('patients')} /> : <PatientsPage onSelectPatient={handleSelectPatient} />;
-          case 'tasks': return <TasksPage />;
-          case 'agenda': return <AgendaPage />;
-          case 'report': return <ReportPage />;
-          default: return <OverviewPage />;
-        }
+      function page(){
+        if(pg==='overview')return h(OverviewPage);
+        if(pg==='patients')return h(PatientsPage,{onSelect:onSel});
+        if(pg==='timeline'&&sel)return h(TimelinePage,{pid:sel.id,pname:sel.name,onBack:function(){setPg('patients')}});
+        if(pg==='tasks')return h(TasksPage);
+        if(pg==='agenda')return h(AgendaPage);
+        if(pg==='report')return h(ReportPage);
+        return h(OverviewPage);
       }
-
-      return (
-        <div style={{ display: 'flex', minHeight: '100vh' }}>
-          {/* Sidebar */}
-          <aside style={{ width: 220, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', padding: '20px 12px', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-            <div style={{ marginBottom: 28, padding: '0 8px' }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent-emerald)' }}>JUCA</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>GUARANÁ CRM</div>
-            </div>
-            <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {navItems.map(item => (
-                <a key={item.id} className={`sidebar-link ${page === item.id ? 'active' : ''}`}
-                  onClick={() => setPage(item.id)}>
-                  {item.icon}
-                  {item.label}
-                </a>
-              ))}
-            </nav>
-            <div style={{ marginTop: 'auto', padding: '12px 8px', borderTop: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>GV Automações</div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>v1.0 — Fase 4</div>
-            </div>
-          </aside>
-
-          {/* Main Content */}
-          <main style={{ flex: 1, padding: 28, overflowY: 'auto', maxHeight: '100vh' }}>
-            {renderPage()}
-          </main>
-        </div>
+      return h('div',{className:'app-layout',style:{display:'flex',minHeight:'100vh'}},
+        h('aside',{className:'app-sidebar',style:{width:220,background:'var(--bg-secondary)',borderRight:'1px solid var(--border)',padding:'20px 12px',display:'flex',flexDirection:'column',flexShrink:0}},
+          h('div',{className:'sidebar-brand',style:{marginBottom:28,padding:'0 8px'}},
+            h('div',{style:{fontSize:18,fontWeight:700,color:'var(--accent-emerald)'}},'JUCA'),
+            h('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-muted)',letterSpacing:'0.08em'}},'GUARAN\u00C1 CRM')
+          ),
+          h('nav',{style:{display:'flex',flexDirection:'column',gap:4}},
+            nav.map(function(it){
+              return h('a',{key:it.id,className:'sidebar-link'+(pg===it.id?' active':''),onClick:function(){setPg(it.id)}},
+                h('span',null,it.icon),' ',it.label
+              );
+            })
+          ),
+          h('div',{className:'sidebar-footer',style:{marginTop:'auto',padding:'12px 8px',borderTop:'1px solid var(--border)'}},
+            h('div',{style:{fontSize:11,color:'var(--text-muted)'}},'GV Automa\u00e7\u00f5es'),
+            h('div',{style:{fontSize:10,color:'var(--text-muted)',marginTop:2}},'v1.0')
+          )
+        ),
+        h('main',{className:'app-main',style:{flex:1,padding:28,overflowY:'auto',maxHeight:'100vh'}}, page())
       );
     }
 
-    ReactDOM.render(<App />, document.getElementById('root'));
+    ReactDOM.render(h(App), document.getElementById('root'));
   </script>
 </body>
 </html>

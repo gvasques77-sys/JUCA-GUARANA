@@ -192,9 +192,9 @@ app.use('/admin/gcal', googleCalendarRoutes);
 // API endpoints em /crm/api/* (montados após criação do supabase client, abaixo)
 // SPA estática em /crm/*
 app.use('/crm', express.static(path.join(__dirname, 'public', 'crm')));
-// Fallback SPA: qualquer rota /crm/* que não seja /crm/api retorna o index.html
-app.get('/crm/*', (req, res, next) => {
-  if (req.path.startsWith('/crm/api')) return next();
+// Fallback SPA: qualquer rota /crm/ que não seja /crm/api retorna o index.html
+// Usa regex em vez de '/crm/*' para compatibilidade com path-to-regexp v8+
+app.get(/^\/crm\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'crm', 'index.html'));
 });
 

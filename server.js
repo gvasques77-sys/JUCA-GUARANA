@@ -14,6 +14,7 @@ import { redisHealthCheck } from './services/redisService.js';
 import { getOrCreateConversation, updateConversationTurn, finalizeConversation } from './services/conversationTracker.js';
 import { processPostConversation } from './services/crmService.js';
 import { startTaskProcessor } from './services/taskProcessor.js';
+import { createCrmApiRouter } from './routes/crmDashboardRoutes.js';
 
 
 // ======================================================
@@ -185,6 +186,18 @@ app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminRoutes);
 app.use('/admin/gcal', googleCalendarRoutes);
 
+// ======================================================
+// DASHBOARD CRM (Fase 4)
+// ======================================================
+// API endpoints em /crm/api/* (montados após criação do supabase client, abaixo)
+// SPA estática em /crm/*
+app.use('/crm', express.static(path.join(__dirname, 'public', 'crm')));
+// Fallback SPA: qualquer rota /crm/* que não seja /crm/api retorna o index.html
+app.get('/crm/*', (req, res, next) => {
+  if (req.path.startsWith('/crm/api')) return next();
+  res.sendFile(path.join(__dirname, 'public', 'crm', 'index.html'));
+});
+
 const log = pino({
   transport: { target: 'pino-pretty' },
 });
@@ -211,6 +224,9 @@ const supabase = createClient(
   SUPABASE_SERVICE_ROLE_KEY || 'missing',
   { auth: { persistSession: false } }
 );
+
+// — CRM Dashboard API (montada aqui porque depende do supabase client) —
+app.use('/crm/api', createCrmApiRouter(supabase));
 
 // ======================================================
 // SCHEMA DE VALIDAÇÃO (Zod)

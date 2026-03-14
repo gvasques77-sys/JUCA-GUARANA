@@ -40,8 +40,12 @@ const TASK_STATUS = {
 /**
  * Adaptador de envio de mensagens WhatsApp.
  * 
- * Na Sub-etapa 3B, este adaptador será conectado à Meta WhatsApp API.
- * Por enquanto, simula o envio e loga o que seria enviado.
+ * Conectado à Meta WhatsApp API usando as variáveis de ambiente:
+ * - META_WA_TOKEN         → Bearer token da Meta
+ * - META_PHONE_NUMBER_ID  → ID do número remetente
+ * - META_API_VERSION      → Versão da Graph API (default: v21.0)
+ * 
+ * Se as credenciais estiverem ausentes, opera em modo simulação (sem envio real).
  * 
  * @param {string} patientPhone - Telefone do destinatário (formato: 55XXXXXXXXXXX)
  * @param {string} message - Mensagem a enviar
@@ -53,18 +57,19 @@ const TASK_STATUS = {
  */
 async function sendWhatsAppMessage(patientPhone, message, options = {}) {
   try {
-    const whatsappToken = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const whatsappToken  = process.env.META_WA_TOKEN;
+    const phoneNumberId  = process.env.META_PHONE_NUMBER_ID;
+    const apiVersion     = process.env.META_API_VERSION || 'v21.0';
 
     // Se não há credenciais configuradas, modo simulação
     if (!whatsappToken || !phoneNumberId) {
       console.log(`[TASK-PROCESSOR] [SIMULAÇÃO] Mensagem para ${patientPhone}: "${message.substring(0, 80)}..."`);
-      console.log(`[TASK-PROCESSOR] Para ativar envio real, configure WHATSAPP_ACCESS_TOKEN e WHATSAPP_PHONE_NUMBER_ID no Railway`);
+      console.log(`[TASK-PROCESSOR] Para ativar envio real, configure META_WA_TOKEN e META_PHONE_NUMBER_ID no Railway`);
       return { success: true, simulated: true, message: 'Credenciais WhatsApp não configuradas — modo simulação' };
     }
 
     // === ENVIO REAL VIA META WHATSAPP API ===
-    const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
 
     let body;
     if (options.templateName) {

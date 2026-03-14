@@ -196,6 +196,180 @@ async function aggregateMetrics(supabase, clinicId) {
 /**
  * Gera análise textual com OpenAI baseada nas métricas agregadas.
  */
+/**
+ * Gera um relatório individual de um paciente específico.
+ * Agrega dados do paciente e gera análise personalizada com OpenAI.
+ *
+ * @param {object} supabase - Cliente Supabase
+ * @param {string} clinicId - UUID da clínica
+ * @param {string} patientId - UUID do paciente
+ * @returns {Promise<{success: boolean, report?: object, error?: string}>}
+ */
+export async function generatePatientReport(supabase, clinicId, patientId) {
+  try {
+    console.log(`[REPORT] Gerando relatório individual para paciente: ${patientId}`);
+
+    // 1. Buscar dados do paciente
+    const { data: patient } = await supabase
+      .from('patients')
+      .select('name, phone, created_at')
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .single();
+
+    if (!patient) {
+      return { success: false, error: 'Paciente não encontrado' };
+    }
+
+    // 2. Buscar projeção CRM
+    const { data: projection } = await supabase
+      .from('patient_crm_projection')
+      .select('*')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .single();
+
+    // 3. Buscar agendamentos
+    const { data: appointments } = await supabase
+      .from('appointments')
+      .select('appointment_date, start_time, status, price, doctors(name, specialty)')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .order('appointment_date', { ascending: false });
+
+    // 4. Buscar eventos CRM
+    const { data: events } = await supabase
+      .from('crm_events')
+      .select('event_type, occurred_at, source_system')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .order('occurred_at', { ascending: false })
+      .limit(30);
+
+    // 5. Buscar perfil extra
+    const { data: profileExtra } = await supabase
+      .from('patient_profile_extra')
+      .select('*')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .single();
+
+    // 6. Buscar tarefas
+    const { data: tasks } = await supabase
+      .from('crm_tasks')
+      .select('task_type, status, due_at, reason')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId);
+
+    // 7. Montar contexto e chamar OpenAI
+    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const appts = appointments || [];
+    const completed = appts.filter(a => a.status === 'completed').length;
+    const cancelled = appts.filter(a => a.status === 'cancelled').length;
+    const noShows = appts.filter(a => a.status === 'no_show').length;
+    const totalRevenue = appts
+      .filter(a => !['cancelled', 'no_show'].includes(a.status))
+      .reduce((sum, a) => sum + Number(a.price || 0), 0);
+
+    const userPrompt = `Analise os seguintes dados de um paciente de uma clínica médica e gere um relatório individual.
+
+## DADOS DO PACIENTE:
+
+- **Nome:** ${patient.name}
+- **Telefone:** ${patient.phone}
+- **Cadastrado em:** ${patient.created_at}
+- **Lead Score:** ${projection?.lead_score || 'N/A'}
+- **Estágio Atual:** ${projection?.current_stage || 'N/A'}
+
+### Agendamentos (${appts.length} total):
+- Concluídos: ${completed}
+- Cancelados: ${cancelled}
+- No-shows: ${noShows}
+- Receita gerada: R$ ${totalRevenue.toFixed(2)}
+${appts.slice(0, 10).map(a => `- ${a.appointment_date} ${(a.start_time || '').substring(0, 5)} — ${a.status} — ${a.doctors?.name || '?'} (${a.doctors?.specialty || ''})`).join('\n')}
+
+### Eventos CRM (últimos ${(events || []).length}):
+${(events || []).slice(0, 15).map(e => `- ${e.event_type} em ${e.occurred_at} (via ${e.source_system})`).join('\n')}
+
+### Tarefas (${(tasks || []).length} total):
+${(tasks || []).map(t => `- ${t.task_type}: ${t.status} — ${t.reason || ''}`).join('\n')}
+
+${profileExtra ? `### Perfil Extra:
+- CPF: ${profileExtra.cpf || 'N/A'}
+- Data Nasc.: ${profileExtra.birth_date || 'N/A'}
+- Convênio: ${profileExtra.insurance_provider || 'N/A'}
+- Origem: ${profileExtra.referral_source || 'N/A'}
+- Preferência Horário: ${profileExtra.preferred_schedule || 'N/A'}
+- Notas Internas: ${profileExtra.internal_notes || 'N/A'}
+- Resumo Médico: ${profileExtra.medical_summary || 'N/A'}` : '### Perfil Extra: não preenchido'}
+
+## INSTRUÇÕES:
+
+Gere um relatório individual que inclua:
+1. **Perfil resumido** (2-3 frases descrevendo o paciente)
+2. **Histórico de atendimento** (frequência, tipos de consulta, padrões)
+3. **Engajamento** (lead score, regularidade, no-shows)
+4. **Alertas** (riscos de churn, no-shows recorrentes, tarefas pendentes)
+5. **Recomendações** (2-3 ações específicas para este paciente)
+
+Formato: texto corrido em português BR, tom profissional, use emojis com moderação.
+Máximo 400 palavras.`;
+
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: 'Você é um analista de CRM para clínicas médicas. Gere relatórios individuais de pacientes claros, acionáveis e em português BR.',
+        },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 800,
+      temperature: 0.4,
+    });
+
+    const text = response.choices[0]?.message?.content || 'Não foi possível gerar o relatório.';
+    const tokensUsed = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
+    const inputCost = ((response.usage?.prompt_tokens || 0) / 1_000_000) * 2.00;
+    const outputCost = ((response.usage?.completion_tokens || 0) / 1_000_000) * 8.00;
+    const costEstimated = parseFloat((inputCost + outputCost).toFixed(6));
+
+    // 8. Salvar em crm_reports
+    const now = new Date();
+    const { data: report, error: insertErr } = await supabase
+      .from('crm_reports')
+      .insert({
+        clinic_id: clinicId,
+        report_type: 'patient',
+        period_start: patient.created_at ? patient.created_at.split('T')[0] : now.toISOString().split('T')[0],
+        period_end: now.toISOString().split('T')[0],
+        metrics: { patient_name: patient.name, lead_score: projection?.lead_score, total_appointments: appts.length },
+        analysis_text: text,
+        generated_by: 'openai',
+        model_used: model,
+        tokens_used: tokensUsed,
+        cost_estimated: costEstimated,
+        metadata: { scope: 'patient', patient_id: patientId },
+      })
+      .select('*')
+      .single();
+
+    if (insertErr) {
+      console.error(`[REPORT] Erro ao salvar relatório do paciente:`, insertErr.message);
+      return {
+        success: true,
+        report: { analysis_text: text, created_at: now.toISOString(), model_used: model, tokens_used: tokensUsed, saved: false },
+      };
+    }
+
+    console.log(`[REPORT] Relatório individual gerado para ${patient.name} (id: ${report.id})`);
+    return { success: true, report };
+  } catch (error) {
+    console.error(`[REPORT] Erro em generatePatientReport:`, error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 async function generateAnalysis(metrics, hasData) {
   try {
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';

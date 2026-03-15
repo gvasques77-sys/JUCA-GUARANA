@@ -38,7 +38,7 @@ function setCachedUser(userId, data) {
  *   req.userId   — UUID do auth.users
  *   req.clinicId — UUID da clínica vinculada
  *   req.userRole — 'owner' | 'staff'
- *   req.userName — nome do usuário
+ *   req.userName — email do usuário (fallback)
  *
  * @param {object} supabase - Cliente Supabase (service_role) do server.js
  */
@@ -46,6 +46,7 @@ export function authMiddleware(supabase) {
   return async function (req, res, next) {
     try {
       const authHeader = req.headers.authorization;
+
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Token de autenticação ausente' });
       }
@@ -69,10 +70,13 @@ export function authMiddleware(supabase) {
       let clinicUser = getCachedUser(user.id);
 
       if (!clinicUser) {
+        // FIX 1: Removido 'name' (coluna não existe na tabela clinic_users)
+        // FIX 2: Filtro corrigido de .eq('id', ...) para .eq('user_id', ...)
+        //         'id' é o PK da tabela, 'user_id' é o UUID do auth.users
         const { data, error: cuError } = await supabase
           .from('clinic_users')
-          .select('clinic_id, role, name')
-          .eq('id', user.id)
+          .select('clinic_id, role')
+          .eq('user_id', user.id)
           .single();
 
         if (cuError || !data) {
@@ -88,7 +92,7 @@ export function authMiddleware(supabase) {
       req.userId = user.id;
       req.clinicId = clinicUser.clinic_id;
       req.userRole = clinicUser.role;
-      req.userName = clinicUser.name || user.email;
+      req.userName = user.email;
 
       next();
     } catch (err) {

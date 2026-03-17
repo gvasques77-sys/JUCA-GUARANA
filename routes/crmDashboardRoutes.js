@@ -1,5 +1,5 @@
 /**
- * CRM Dashboard API Routes — Fase 5
+ * CRM Dashboard API Routes — Fase 5 + F7A
  *
  * Endpoints protegidos por authMiddleware (Supabase JWT).
  * clinic_id vem do JWT, não mais de query param.
@@ -12,6 +12,10 @@
  * - PUT    /tasks/:id/complete    — Marca tarefa como concluída manualmente
  * - PUT    /tasks/:id/cancel      — Cancela tarefa
  * - GET    /tasks/summary         — Contagem por status (para badge)
+ *
+ * Melhorias F7A:
+ * - GET    /tasks                 — Retorna com prioridade (pending/failed primeiro), limit 200
+ * - PATCH  /tasks/:id/status      — Atualiza status da tarefa (executed/cancelled)
  */
 
 import { Router } from 'express';
@@ -412,7 +416,8 @@ export function createCrmApiRouter(supabase) {
   // ======================================================
   router.get('/tasks', async (req, res) => {
     try {
-      const { status = 'pending', limit = '50' } = req.query;
+      const { status = 'pending', limit = '200' } = req.query;
+
       let query = supabase
         .from('crm_tasks')
         .select('id, clinic_id, patient_id, task_type, reason, due_at, status, retry_count, last_error, message_template, created_at, executed_at, patients!inner(name, phone)')
@@ -428,7 +433,16 @@ export function createCrmApiRouter(supabase) {
         return res.json(fb || []);
       }
 
-      const normalized = (data || []).map(t => ({
+      // Priorizar pendentes e falhas no topo
+      var statusOrder = { pending: 0, failed: 1 };
+      var sorted = (data || []).sort(function(a, b) {
+        var ao = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 2;
+        var bo = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 2;
+        if (ao !== bo) return ao - bo;
+        return new Date(b.due_at) - new Date(a.due_at);
+      });
+
+      const normalized = sorted.map(t => ({
         ...t,
         patient_name: t.patients?.name || 'Desconhecido',
         patient_phone: t.patients?.phone || '',
@@ -554,6 +568,56 @@ export function createCrmApiRouter(supabase) {
       return res.json({ success: true, message: 'Tarefa cancelada' });
     } catch (err) {
       console.error('[CRM-API] PUT /tasks/:id/cancel:', err.message);
+      return res.status(500).json({ error: 'Erro interno' });
+    }
+  });
+
+  // ======================================================
+  // 5E. ATUALIZAR STATUS DA TAREFA (F7A)
+  // ======================================================
+  router.patch('/tasks/:taskId/status', async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const { status } = req.body || {};
+
+      if (!['executed', 'cancelled'].includes(status)) {
+        return res.status(400).json({ error: 'Status inválido. Use: executed ou cancelled' });
+      }
+
+      const { data: task, error: findErr } = await supabase
+        .from('crm_tasks')
+        .select('id, status')
+        .eq('id', taskId)
+        .eq('clinic_id', req.clinicId)
+        .single();
+
+      if (findErr || !task) {
+        return res.status(404).json({ error: 'Tarefa não encontrada' });
+      }
+
+      if (['completed', 'manual_completed', 'cancelled', 'executed'].includes(task.status)) {
+        return res.json({ success: true, message: 'Tarefa já finalizada', task });
+      }
+
+      const update = { status, updated_at: new Date().toISOString() };
+      if (status === 'executed') update.executed_at = new Date().toISOString();
+
+      const { data: updated, error: updateErr } = await supabase
+        .from('crm_tasks')
+        .update(update)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+
+      if (updateErr) {
+        console.error('[CRM-API] Erro ao atualizar status da tarefa:', updateErr.message);
+        return res.status(500).json({ error: 'Erro ao atualizar tarefa' });
+      }
+
+      console.log(`[CRM-API] Tarefa ${taskId} → ${status} por ${req.userName}`);
+      return res.json({ success: true, task: updated });
+    } catch (err) {
+      console.error('[CRM-API] PATCH /tasks/:id/status:', err.message);
       return res.status(500).json({ error: 'Erro interno' });
     }
   });

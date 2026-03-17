@@ -16,6 +16,9 @@
  * Melhorias F7A:
  * - GET    /tasks                 — Retorna com prioridade (pending/failed primeiro), limit 200
  * - PATCH  /tasks/:id/status      — Atualiza status da tarefa (executed/cancelled)
+ *
+ * Melhorias F9A:
+ * - GET    /analytics             — Inclui weekly_timeline (últimas 8 semanas)
  */
 
 import { Router } from 'express';
@@ -759,6 +762,25 @@ export function createCrmApiRouter(supabase) {
       if(ativos>5) insights.push({type:'strength',text:ativos+' agendamentos ativos na fila.'});
       if(receitaEfetiva>1000) insights.push({type:'strength',text:'Receita efetiva de R$ '+receitaEfetiva.toFixed(2)+' gerada pelo sistema.'});
 
+      // F9A: Timeline semanal — últimas 8 semanas
+      var weekly_timeline = [];
+      for (var w = 7; w >= 0; w--) {
+        var wStart = new Date(now.getTime() - (w + 1) * 7 * 86400000);
+        var wEnd = new Date(now.getTime() - w * 7 * 86400000);
+        var wStartStr = wStart.toISOString().split('T')[0];
+        var wEndStr = wEnd.toISOString().split('T')[0];
+        var wLabel = wStart.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        var wAppts = all.filter(function(a) { return a.appointment_date >= wStartStr && a.appointment_date < wEndStr; });
+        weekly_timeline.push({
+          label: wLabel,
+          total: wAppts.length,
+          cancelled: wAppts.filter(function(a) { return a.status === 'cancelled'; }).length,
+          completed: wAppts.filter(function(a) { return a.status === 'completed'; }).length,
+          no_show: wAppts.filter(function(a) { return a.status === 'no_show'; }).length,
+          revenue: wAppts.filter(function(a) { return ['cancelled', 'no_show'].indexOf(a.status) < 0; }).reduce(function(s, a) { return s + Number(a.price || 0); }, 0),
+        });
+      }
+
       const result = {
         resumo: {
           total_agendamentos:total, agendamentos_ativos:ativos, concluidos:concluidos,
@@ -773,6 +795,7 @@ export function createCrmApiRouter(supabase) {
         },
         ranking_medicos: ranking_medicos,
         insights: insights,
+        weekly_timeline: weekly_timeline,
       };
 
       // Staff não vê dados financeiros

@@ -267,7 +267,7 @@ function T2(p){
 function PatientModal(p){
   var _d=us(null),data=_d[0],sD=_d[1];
   var _l=us(true),ld=_l[0],sL=_l[1];
-  var _tab=us('history'),tab=_tab[0],sTab=_tab[1];
+  var _tab=us('resumo'),tab=_tab[0],sTab=_tab[1];
   var _prof=us({}),prof=_prof[0],sProf=_prof[1];
   var _saving=us(false),saving=_saving[0],sSaving=_saving[1];
   var _genRpt=us(false),genRpt=_genRpt[0],sGenRpt=_genRpt[1];
@@ -309,15 +309,13 @@ function PatientModal(p){
 
   return h('div',{className:'modal-overlay',onClick:p.onClose},
     h('div',{className:'modal-content',onClick:function(e){e.stopPropagation()}},
-      // Header
+      // Header compacto F7B
       h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:20}},
         h('div',null,
           h('h2',{style:{fontSize:22,fontWeight:700,marginBottom:4}},pt.name||'Paciente'),
-          h('div',{style:{fontSize:13,color:'var(--t2)',display:'flex',gap:16,flexWrap:'wrap'}},
-            h('span',null,pt.phone||''),
-            h('span',null,'Cadastro: '+fd(pt.created_at)),
-            proj.current_stage?h(Bg,{stage:proj.current_stage}):null,
-            proj.lead_score!==undefined?h('span',{className:'mono',style:{fontWeight:600,color:(proj.lead_score||0)>=60?'var(--green)':(proj.lead_score||0)>=30?'var(--amber)':'var(--t3)'}},'Score: '+(proj.lead_score||0)):null
+          h('div',{style:{fontSize:13,color:'var(--t2)',display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},
+            h('span',null,'\uD83D\uDCDE '+pt.phone||''),
+            proj.current_stage?h(Bg,{stage:proj.current_stage,color:(function(){var sc={first_contact:'#3B82F6',in_triage:'#06B6D4',booking_requested:'#8B5CF6',booked:'#10B981',attended:'#22C55E',no_show:'#F59E0B',follow_up:'#F59E0B',reactivation:'#F43F5E',returning:'#10B981'};return sc[proj.current_stage]||'#3B82F6'})()}):null
           )
         ),
         h('div',{style:{display:'flex',gap:8}},
@@ -326,14 +324,74 @@ function PatientModal(p){
         )
       ),
 
-      // Tabs
+      // Tabs F7B
       h('div',{className:'tab-bar'},
+        h('button',{className:'tab-btn'+(tab==='resumo'?' active':''),onClick:function(){sTab('resumo')}},'Resumo'),
         h('button',{className:'tab-btn'+(tab==='history'?' active':''),onClick:function(){sTab('history')}},'Hist\u00f3rico'),
         h('button',{className:'tab-btn'+(tab==='timeline'?' active':''),onClick:function(){sTab('timeline')}},'Timeline CRM'),
         h('button',{className:'tab-btn'+(tab==='profile'?' active':''),onClick:function(){sTab('profile')}},'Perfil'),
         h('button',{className:'tab-btn'+(tab==='tasks'?' active':''),onClick:function(){sTab('tasks')}},'Tarefas ('+tasks.length+')'),
         rpt?h('button',{className:'tab-btn'+(tab==='report'?' active':''),onClick:function(){sTab('report')}},'Relat\u00f3rio IA'):null
       ),
+
+      // Tab content: RESUMO CRM (F7B)
+      tab==='resumo'?h('div',{className:'fi'},
+        // Lead Score visual
+        h('div',{className:'card',style:{marginBottom:12}},
+          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
+            h('div',{style:{fontSize:14,fontWeight:600}},'Lead Score'),
+            h('div',{className:'mono',style:{fontSize:22,fontWeight:700,color:(proj.lead_score||0)>=60?'var(--green)':(proj.lead_score||0)>=30?'var(--amber)':'var(--t3)'}},proj.lead_score!==undefined?(proj.lead_score||0)+'/100':'\u2014')
+          ),
+          h('div',{style:{height:8,background:'var(--bg)',borderRadius:4,overflow:'hidden'}},
+            h('div',{style:{width:Math.min(proj.lead_score||0,100)+'%',height:'100%',borderRadius:4,background:(proj.lead_score||0)>=60?'var(--green)':(proj.lead_score||0)>=30?'var(--amber)':'var(--t3)',transition:'width 0.6s ease'}})
+          ),
+          h('div',{style:{fontSize:11,color:'var(--t3)',marginTop:6}},(proj.lead_score||0)>=60?'Paciente engajado \u2014 alta probabilidade de retorno':(proj.lead_score||0)>=30?'Engajamento moderado \u2014 acompanhar':'Baixo engajamento \u2014 considerar reativa\u00e7\u00e3o')
+        ),
+
+        // Cards de estat\u00edsticas
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:12}},
+          h('div',{className:'card',style:{textAlign:'center',padding:14}},
+            h('div',{style:{fontSize:11,color:'var(--t3)',marginBottom:4}},'Total Consultas'),
+            h('div',{className:'mono',style:{fontSize:22,fontWeight:700,color:'var(--blue)'}},proj.total_appointments||appts.length||0)
+          ),
+          isOwner?h('div',{className:'card',style:{textAlign:'center',padding:14}},
+            h('div',{style:{fontSize:11,color:'var(--t3)',marginBottom:4}},'Receita Gerada'),
+            h('div',{className:'mono',style:{fontSize:18,fontWeight:700,color:'var(--green)'}},cur(proj.total_revenue||appts.filter(function(a){return['cancelled','no_show'].indexOf(a.status)<0}).reduce(function(s,a){return s+Number(a.price||0)},0)))
+          ):null,
+          h('div',{className:'card',style:{textAlign:'center',padding:14}},
+            h('div',{style:{fontSize:11,color:'var(--t3)',marginBottom:4}},'Primeiro Contato'),
+            h('div',{style:{fontSize:14,fontWeight:600}},fd(proj.first_contact_at||pt.created_at))
+          ),
+          h('div',{className:'card',style:{textAlign:'center',padding:14}},
+            h('div',{style:{fontSize:11,color:'var(--t3)',marginBottom:4}},'\u00DAltimo Contato'),
+            h('div',{style:{fontSize:14,fontWeight:600}},proj.last_contact_at?fd(proj.last_contact_at):'\u2014'),
+            proj.last_contact_at?h('div',{style:{fontSize:11,color:(function(){var days=Math.floor((Date.now()-new Date(proj.last_contact_at).getTime())/86400000);return days>30?'var(--rose)':days>14?'var(--amber)':'var(--t3)'})(),marginTop:2}},ago(proj.last_contact_at)+' atr\u00e1s'):null
+          )
+        ),
+
+        // Pr\u00f3xima consulta
+        (function(){
+          var next=appts.find(function(a){return['scheduled','confirmed'].indexOf(a.status)>=0&&a.appointment_date>=new Date().toISOString().split('T')[0]});
+          return next?h('div',{className:'card',style:{marginBottom:12,borderLeft:'3px solid var(--green)'}},
+            h('div',{style:{fontSize:12,fontWeight:600,color:'var(--green)',marginBottom:6}},'\uD83D\uDCC5 Pr\u00f3xima Consulta'),
+            h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8}},
+              h('div',null,
+                h('div',{style:{fontSize:15,fontWeight:600}},fd(next.appointment_date)+' \u00e0s '+(next.start_time||'').substring(0,5)),
+                next.doctors?h('div',{style:{fontSize:13,color:'var(--t2)',marginTop:2}},next.doctors.name+' \u2014 '+next.doctors.specialty):null
+              ),
+              h('span',{className:'badge',style:{background:stC[next.status]+'25',color:stC[next.status]}},stL[next.status]||next.status)
+            )
+          ):h('div',{className:'card',style:{marginBottom:12,borderLeft:'3px solid var(--t3)'}},
+            h('div',{style:{fontSize:13,color:'var(--t3)'}},'Nenhuma consulta futura agendada')
+          );
+        })(),
+
+        // A\u00e7\u00f5es r\u00e1pidas
+        h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+          pt.phone?h('a',{href:'tel:'+pt.phone,className:'btn',style:{textDecoration:'none',fontSize:12}},'\uD83D\uDCDE Ligar'):null,
+          pt.phone?h('a',{href:'https://wa.me/'+pt.phone.replace(/\D/g,''),target:'_blank',className:'btn',style:{textDecoration:'none',fontSize:12,background:'#25D366'}},'\uD83D\uDCF1 WhatsApp'):null
+        )
+      ):null,
 
       // Tab content: HIST\u00d3RICO
       tab==='history'?h('div',{className:'fi'},
@@ -697,7 +755,7 @@ function App(){
             h('span',{className:'badge',style:{background:isOwner?'rgba(16,185,129,.15)':'rgba(139,92,246,.15)',color:isOwner?'#10B981':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,textDecoration:'underline',fontFamily:'DM Sans'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:8}},'v3.1 F7A')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:8}},'v3.2 F7B')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:28,overflowY:'auto',maxHeight:'100vh'}},page())

@@ -130,11 +130,16 @@ var SL={first_contact:'Primeiro Contato',in_triage:'Em Triagem',booking_requeste
 var EL={first_contact:'Primeiro Contato',triage_started:'Triagem',booking_created:'Agend. Criado',booking_confirmed:'Confirmado',booking_canceled:'Cancelado',appointment_completed:'Consulta Realizada',no_show:'N\u00e3o Compareceu',follow_up_created:'Follow-up',conversation_ended:'Conversa Encerrada',info_requested:'Info Solicitada',intent_detected:'Inten\u00e7\u00e3o',reactivation_started:'Reativa\u00e7\u00e3o',returning_patient_detected:'Recorrente',note_added:'Nota',tag_added:'Tag',stage_override:'Est\u00e1gio Alterado'};
 var EI={first_contact:'\uD83D\uDC4B',booking_created:'\u2705',booking_confirmed:'\u2714',booking_canceled:'\u274C',appointment_completed:'\uD83C\uDFE5',no_show:'\u26A0',follow_up_created:'\uD83D\uDCDE',conversation_ended:'\uD83D\uDCAC',info_requested:'\u2753',triage_started:'\uD83D\uDD0D',intent_detected:'\uD83C\uDFAF',reactivation_started:'\uD83D\uDD04',returning_patient_detected:'\uD83D\uDD01',note_added:'\uD83D\uDCDD',tag_added:'\uD83C\uDFF7',stage_override:'\uD83D\uDD00',follow_up_completed:'\u2705'};
 var TL={reminder_24h:'Lembrete 24h',booking_confirmation:'Confirma\u00e7\u00e3o de Agendamento',post_consultation:'P\u00f3s-consulta',no_show_recovery:'Recupera\u00e7\u00e3o No-show',reactivation:'Reativa\u00e7\u00e3o',custom:'Personalizada'};
-var TASK_TYPE_LABELS={reminder_24h:'Lembrete de consulta em 24h',booking_confirmation:'Confirma\u00e7\u00e3o de agendamento realizado',post_consultation:'P\u00f3s-consulta \u2014 verificar satisfa\u00e7\u00e3o',no_show_recovery:'Paciente n\u00e3o compareceu \u2014 fazer contato',reactivation:'Paciente inativo \u2014 reativar',custom:'Tarefa personalizada'};
+var TASK_TYPE_LABELS={follow_up_24h:'Lembrete 24h',follow_up_48h:'Lembrete 48h',follow_up_post_consultation:'P\u00f3s-consulta',follow_up_no_show:'N\u00e3o compareceu',follow_up_reactivation:'Reativa\u00e7\u00e3o',booking_reminder:'Lembrete de consulta',reminder_24h:'Lembrete de consulta em 24h',booking_confirmation:'Confirma\u00e7\u00e3o de agendamento',post_consultation:'P\u00f3s-consulta',no_show_recovery:'Paciente n\u00e3o compareceu',reactivation:'Reativa\u00e7\u00e3o',custom:'Tarefa personalizada'};
 var stC={scheduled:'#3B82F6',confirmed:'#10B981',completed:'#22C55E',cancelled:'#F43F5E',no_show:'#F59E0B',waiting:'#8B5CF6',in_progress:'#06B6D4'};
 var stL={scheduled:'Agendado',confirmed:'Confirmado',completed:'Atendido',cancelled:'Cancelado',no_show:'No-show',waiting:'Aguardando',in_progress:'Em Atendimento'};
-var taskStC={pending:'#3B82F6',executing:'#06B6D4',completed:'#10B981',manual_completed:'#22C55E',failed:'#F43F5E',cancelled:'#64748B'};
-var taskStL={pending:'Pendente',executing:'Executando',completed:'Conclu\u00edda',manual_completed:'Conclu\u00edda (manual)',failed:'Falhou',cancelled:'Cancelada'};
+var taskStC={pending:'#F59E0B',executed:'#10B981',executing:'#06B6D4',completed:'#10B981',manual_completed:'#22C55E',failed:'#F43F5E',cancelled:'#64748B',skipped:'#94A3B8'};
+var taskStL={pending:'Pendente',executed:'Executada',executing:'Executando',completed:'Conclu\u00edda',manual_completed:'Conclu\u00edda',failed:'Falhou',cancelled:'Cancelada',skipped:'Ignorada'};
+
+function humanizeSrc(s){var m={backfill:'via sistema',backfill_f6:'via sistema',system:'via sistema',whatsapp:'via WhatsApp',dashboard:'via painel',crm_service:'via sistema'};if(!s)return'';if(m[s])return m[s];if(s.indexOf('backfill')===0)return'via sistema';return'via sistema';}
+var UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function fmtKey(k){var m={doctor_id:'M\u00e9dico',service_id:'Servi\u00e7o',appointment_date:'Data',price:'Valor',reason:'Motivo',cancelled_by:'Cancelado por',cancellation_reason:'Motivo',patient_name:'Paciente',phone:'Telefone'};return m[k]||(k.replace(/_/g,' '));}
+function fmtPayload(et,payload){if(!payload)return'';try{var p=typeof payload==='string'?JSON.parse(payload):payload;switch(et){case'first_contact':return'Paciente: '+(p.patient_name||'\u2014')+' | Telefone: '+(p.phone||'\u2014');case'booking_created':return'Consulta em '+(p.appointment_date?fd(p.appointment_date):'\u2014')+(p.price?' | Valor: R$ '+p.price:'');case'booking_canceled':return'Motivo: '+(p.reason||p.cancellation_reason||'\u2014')+' | Por: '+(p.cancelled_by||'\u2014');case'booking_confirmed':return'Consulta confirmada';case'appointment_completed':return'Consulta realizada';case'no_show':return'Paciente n\u00e3o compareceu';case'conversation_ended':return'Conversa encerrada';default:var parts=Object.entries(p).filter(function(kv){return['backfill','backfill_reason','auto'].indexOf(kv[0])<0&&!UUID_RE.test(String(kv[1]))});if(parts.length===0)return'';return parts.map(function(kv){return fmtKey(kv[0])+': '+kv[1]}).join(' | ');}}catch(e){return''}}
 
 function Ld(){return h('div',{style:{padding:20}},h('div',{className:'skel',style:{width:'60%'}}),h('div',{className:'skel',style:{width:'80%'}}),h('div',{className:'skel',style:{width:'40%'}}))}
 function Em(p){return h('div',{style:{textAlign:'center',padding:40,color:'var(--t3)'}},h('div',{style:{fontSize:40,marginBottom:12}},p.i||'\uD83D\uDCED'),h('p',{style:{fontSize:14}},p.m))}
@@ -349,13 +354,14 @@ function PatientModal(p){
         h('div',{style:{paddingLeft:24,position:'relative'}},
           h('div',{style:{position:'absolute',left:9,top:0,bottom:0,width:2,background:'var(--bdr)'}}),
           events.map(function(e,i){
+            var ptxt=fmtPayload(e.event_type,e.payload);
             return h('div',{key:e.id||i,className:'card',style:{marginBottom:12,marginLeft:20,position:'relative'}},
               h('div',{style:{position:'absolute',left:-32,top:20,width:20,height:20,borderRadius:'50%',background:'var(--card)',border:'2px solid var(--blue)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10}},EI[e.event_type]||'\uD83D\uDCCC'),
               h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8}},
-                h('div',null,h('div',{style:{fontWeight:600,fontSize:14}},EL[e.event_type]||e.event_type),h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:2}},'via '+e.source_system)),
+                h('div',null,h('div',{style:{fontWeight:600,fontSize:14}},EL[e.event_type]||e.event_type),h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:2}},humanizeSrc(e.source_system))),
                 h('div',{style:{fontSize:12,color:'var(--t3)',whiteSpace:'nowrap'}},fdt(e.occurred_at))
               ),
-              e.payload&&Object.keys(e.payload).length>0?h('div',{className:'mono',style:{fontSize:11,color:'var(--t3)',marginTop:8,padding:8,background:'var(--bg2)',borderRadius:6,wordBreak:'break-all'}},JSON.stringify(e.payload)):null
+              ptxt?h('div',{style:{fontSize:12,color:'var(--t2)',marginTop:6,lineHeight:'1.5'}},ptxt):null
             );
           })
         )
@@ -437,7 +443,7 @@ function PatientModal(p){
   );
 }
 
-/* ===== TELA 3: TIMELINE (standalone, mantida para compat) ===== */
+/* ===== TELA 3: TIMELINE ===== */
 function T3(p){
   var _e=us([]),ev=_e[0],sE=_e[1];var _l=us(true),ld=_l[0],sL=_l[1];
   function load(){q('/patients/'+p.pid+'/timeline').then(function(d){sE(d||[]);sL(false)})}
@@ -451,73 +457,91 @@ function T3(p){
     h('div',{style:{paddingLeft:24,position:'relative'}},
       h('div',{style:{position:'absolute',left:9,top:0,bottom:0,width:2,background:'var(--bdr)'}}),
       ev.map(function(e,i){
+        var ptxt=fmtPayload(e.event_type,e.payload);
         return h('div',{key:e.event_id||i,className:'card',style:{marginBottom:12,marginLeft:20,position:'relative'}},
           h('div',{style:{position:'absolute',left:-32,top:20,width:20,height:20,borderRadius:'50%',background:'var(--card)',border:'2px solid var(--blue)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10}},EI[e.event_type]||'\uD83D\uDCCC'),
           h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8}},
-            h('div',null,h('div',{style:{fontWeight:600,fontSize:14}},EL[e.event_type]||e.event_type),h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:2}},'via '+e.source_system)),
+            h('div',null,h('div',{style:{fontWeight:600,fontSize:14}},EL[e.event_type]||e.event_type),h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:2}},humanizeSrc(e.source_system))),
             h('div',{style:{fontSize:12,color:'var(--t3)',whiteSpace:'nowrap'}},fdt(e.occurred_at))
           ),
-          e.payload&&Object.keys(e.payload).length>0?h('div',{className:'mono',style:{fontSize:11,color:'var(--t3)',marginTop:8,padding:8,background:'var(--bg2)',borderRadius:6,wordBreak:'break-all'}},JSON.stringify(e.payload)):null
+          ptxt?h('div',{style:{fontSize:12,color:'var(--t2)',marginTop:6,lineHeight:'1.5'}},ptxt):null
         );
       })
     )
   );
 }
 
-/* ===== TELA 4: TAREFAS MELHORADAS (F5) ===== */
+/* ===== TELA 4: TAREFAS ===== */
 function T4(p){
-  var _t=us([]),tk=_t[0],sT=_t[1];var _l=us(true),ld=_l[0],sL=_l[1];var _f=us('pending'),sf=_f[0],sF=_f[1];
+  var _t=us([]),tk=_t[0],sT=_t[1];var _l=us(true),ld=_l[0],sL=_l[1];var _f=us('all'),fil=_f[0],sF=_f[1];
   var _acting=us(null),acting=_acting[0],sActing=_acting[1];
-  function load(){sL(true);q('/tasks?status='+sf).then(function(d){sT(d||[]);sL(false)})}
-  ue(function(){load()},[sf]);useRefresh(load,15000);
+  function load(){sL(true);q('/tasks?limit=200').then(function(d){sT(d||[]);sL(false)})}
+  ue(function(){load()},[]);useRefresh(load,15000);
 
-  function completeTask(id){
+  function updStatus(id,status){
     sActing(id);
-    q('/tasks/'+id+'/complete',{method:'PUT'}).then(function(r){sActing(null);if(r&&r.success)load()});
+    q('/tasks/'+id+'/status',{method:'PATCH',body:JSON.stringify({status:status})}).then(function(r){sActing(null);if(r&&r.success)load()});
   }
-  function cancelTask(id){
-    if(!confirm('Cancelar esta tarefa?'))return;
-    sActing(id);
-    q('/tasks/'+id+'/cancel',{method:'PUT',body:JSON.stringify({reason:'Cancelada manualmente via dashboard'})}).then(function(r){sActing(null);if(r&&r.success)load()});
-  }
+
+  var tabs=[{k:'all',l:'Todas'},{k:'pending',l:'Pendentes'},{k:'executed',l:'Executadas'},{k:'cancelled',l:'Canceladas'}];
+  var filtered=fil==='all'?tk:tk.filter(function(t){
+    if(fil==='pending')return t.status==='pending'||t.status==='executing'||t.status==='failed';
+    if(fil==='executed')return t.status==='executed'||t.status==='manual_completed'||t.status==='completed';
+    if(fil==='cancelled')return t.status==='cancelled';
+    return true;
+  });
+  var ttl=function(tt){return TASK_TYPE_LABELS[tt]||(tt.replace(/_/g,' '))};
+  var sbg=function(st){var c=taskStC[st]||'#94A3B8';return h('span',{className:'badge',style:{background:c+'25',color:c}},taskStL[st]||st)};
+  var tcnt=function(k){
+    if(k==='all')return tk.length;
+    if(k==='pending')return tk.filter(function(t){return t.status==='pending'||t.status==='executing'||t.status==='failed'}).length;
+    if(k==='executed')return tk.filter(function(t){return t.status==='executed'||t.status==='manual_completed'||t.status==='completed'}).length;
+    return tk.filter(function(t){return t.status==='cancelled'}).length;
+  };
 
   return h('div',{className:'fi'},
-    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12}},
-      h('h2',{style:{fontSize:22,fontWeight:700}},'Tarefas',p.taskSummary&&p.taskSummary.overdue>0?h('span',{style:{color:'var(--rose)',fontSize:14,fontWeight:400,marginLeft:8}},'('+p.taskSummary.overdue+' atrasadas)'):null),
-      h('select',{value:sf,onChange:function(e){sF(e.target.value)}},
-        h('option',{value:'pending'},'Pendentes'),
-        h('option',{value:'completed'},'Conclu\u00eddas'),
-        h('option',{value:'manual_completed'},'Conclu\u00eddas (manual)'),
-        h('option',{value:'failed'},'Com Falha'),
-        h('option',{value:'cancelled'},'Canceladas'),
-        h('option',{value:'all'},'Todas')
-      )
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:12}},
+      h('h2',{style:{fontSize:22,fontWeight:700}},'Tarefas',p.taskSummary&&p.taskSummary.overdue>0?h('span',{style:{color:'var(--rose)',fontSize:14,fontWeight:400,marginLeft:8}},'('+p.taskSummary.overdue+' atrasadas)'):null)
     ),
-    ld?h(Ld):tk.length===0?h(Em,{m:'Nenhuma tarefa com status: '+(taskStL[sf]||sf),i:'\u2705'}):
-    h('div',{style:{display:'flex',flexDirection:'column',gap:8}},tk.map(function(t){
-      var od=t.status==='pending'&&new Date(t.due_at)<new Date();
-      var isPending=t.status==='pending'||t.status==='executing';
-      var sc=taskStC[t.status]||'#3B82F6';
-      return h('div',{key:t.id||t.task_id,className:'card',style:{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,borderLeft:'3px solid '+(od?'var(--rose)':sc)}},
-        h('div',{style:{flex:1,minWidth:200}},
-          h('div',{style:{fontWeight:600,fontSize:14}},TASK_TYPE_LABELS[t.task_type]||t.task_type),
-          h('div',{style:{fontSize:13,color:'var(--t2)',marginTop:2}},
-            h('span',{style:{cursor:'pointer',color:'var(--blue)',textDecoration:'underline'},onClick:function(e){e.stopPropagation();p.onOpenPatient(t.patient_id,t.patient_name)}},t.patient_name||'Desconhecido'),
-            ' \u2022 ',t.patient_phone||''
-          ),
-          t.reason?h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:2}},t.reason):null,
-          h('div',{style:{fontSize:12,marginTop:4}},h('span',{className:'badge',style:{background:sc+'25',color:sc}},taskStL[t.status]||t.status))
-        ),
-        h('div',{style:{textAlign:'right',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}},
-          h('div',{style:{fontSize:12,color:od?'var(--rose)':'var(--t3)',fontWeight:od?600:400}},(od?'\u26A0 Atrasada \u2014 ':'')+fdt(t.due_at)),
-          t.retry_count>0?h('div',{style:{fontSize:11,color:'var(--amber)'}},'Retry '+t.retry_count+'/3'):null,
-          isPending?h('div',{style:{display:'flex',gap:4}},
-            h('button',{className:'btnG',disabled:acting===t.id,onClick:function(){completeTask(t.id)}},acting===t.id?'...':'Marcar como feita'),
-            h('button',{className:'btnR',disabled:acting===t.id,onClick:function(){cancelTask(t.id)}},acting===t.id?'...':'Cancelar')
-          ):null
-        )
-      );
-    }))
+    h('div',{className:'tab-bar'},
+      tabs.map(function(tab){
+        return h('button',{key:tab.k,className:'tab-btn'+(fil===tab.k?' active':''),onClick:function(){sF(tab.k)}},
+          tab.l,' ',h('span',{style:{fontSize:11,color:'var(--t3)'}},'('+tcnt(tab.k)+')')
+        );
+      })
+    ),
+    ld?h(Ld):filtered.length===0?h(Em,{m:'Nenhuma tarefa encontrada',i:'\u2705'}):
+    h('div',{className:'card',style:{padding:0,overflow:'auto'}},
+      h('table',null,
+        h('thead',null,h('tr',null,
+          h('th',null,'Paciente'),
+          h('th',null,'Tipo'),
+          h('th',null,'Motivo'),
+          h('th',null,'Data Prevista'),
+          h('th',null,'Status'),
+          h('th',null,'A\u00e7\u00f5es')
+        )),
+        h('tbody',null,filtered.map(function(t){
+          var od=t.status==='pending'&&new Date(t.due_at)<new Date();
+          var isPending=t.status==='pending'||t.status==='executing';
+          return h('tr',{key:t.id,className:'trow'},
+            h('td',null,
+              h('div',{style:{fontWeight:600,cursor:'pointer',color:'var(--blue)',fontSize:13},onClick:function(){p.onOpenPatient(t.patient_id,t.patient_name)}},t.patient_name||'\u2014'),
+              t.patient_phone?h('div',{style:{fontSize:11,color:'var(--t3)',marginTop:2}},t.patient_phone):null
+            ),
+            h('td',{style:{fontSize:13}},ttl(t.task_type)),
+            h('td',{style:{maxWidth:180,fontSize:12,color:'var(--t2)'}},t.reason||'\u2014'),
+            h('td',null,h('div',{className:'mono',style:{fontSize:12,color:od?'var(--rose)':'var(--t2)',fontWeight:od?600:400}},(od?'\u26A0 ':'')+fdt(t.due_at))),
+            h('td',null,sbg(t.status)),
+            h('td',null,h('div',{style:{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}},
+              isPending?h('button',{className:'btnG',disabled:acting===t.id,onClick:function(){updStatus(t.id,'executed')}},acting===t.id?'...':'\u2705 Concluir'):null,
+              isPending?h('button',{className:'btnR',disabled:acting===t.id,onClick:function(){if(confirm('Cancelar esta tarefa?'))updStatus(t.id,'cancelled')}},acting===t.id?'...':'\u274C Cancelar'):null,
+              t.patient_phone?h('a',{href:'tel:'+t.patient_phone,style:{display:'inline-flex',alignItems:'center',padding:'3px 8px',background:'rgba(6,182,212,.15)',color:'var(--cyan)',borderRadius:6,fontSize:11,fontWeight:600,textDecoration:'none'}},'\uD83D\uDCDE Ligar'):null
+            ))
+          );
+        }))
+      )
+    )
   );
 }
 
@@ -587,8 +611,7 @@ function T6(p){
         h('div',null,h('span',{className:'badge',style:{background:'rgba(16,185,129,.15)',color:'#10B981'}},rpt.report_type==='weekly'?'Semanal':rpt.report_type),h('span',{style:{fontSize:12,color:'var(--t3)',marginLeft:8}},fd(rpt.period_start)+' \u2014 '+fd(rpt.period_end))),
         h('span',{style:{fontSize:11,color:'var(--t3)'}},'Gerado: '+fdt(rpt.created_at))
       ),
-      h('div',{className:'rt'},rTxt(rpt.analysis_text)),
-      rpt.tokens_used>0?h('div',{style:{marginTop:16,paddingTop:12,borderTop:'1px solid var(--bdr)',fontSize:11,color:'var(--t3)'}},'Modelo: '+rpt.model_used+' | Tokens: '+rpt.tokens_used+' | Custo: $'+rpt.cost_estimated):null
+      h('div',{className:'rt'},rTxt(rpt.analysis_text))
     ):h('div',{className:'card'},h(Em,{m:isOwner?'Clique em "Gerar Relat\u00f3rio" para come\u00e7ar.':'Apenas administradores podem gerar relat\u00f3rios.',i:'\uD83D\uDCCA'}))
   );
 }
@@ -611,10 +634,7 @@ function App(){
       }
       q('/me').then(function(d){
         if(!d||!d.clinicId){
-          console.error('[CRM] /me falhou — sem clinicId na resposta:', JSON.stringify(d));
-          // Não fazer logout imediato: pode ser erro de banco (clinic_users)
-          // Mostra mensagem de erro em vez de loop infinito
-          sU({error: (d&&d.error)||'Erro ao carregar dados do usuário'});
+          sU({error: (d&&d.error)||'Erro ao carregar dados do usu\u00e1rio'});
           sReady(true);
           return;
         }
@@ -690,7 +710,7 @@ function App(){
             h('span',{className:'badge',style:{background:isOwner?'rgba(16,185,129,.15)':'rgba(139,92,246,.15)',color:isOwner?'#10B981':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,textDecoration:'underline',fontFamily:'DM Sans'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:8}},'v3.0 F5')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:8}},'v3.1')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:28,overflowY:'auto',maxHeight:'100vh'}},page())

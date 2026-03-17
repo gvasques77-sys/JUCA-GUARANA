@@ -412,23 +412,29 @@ export function createCrmApiRouter(supabase) {
   // ======================================================
   router.get('/tasks', async (req, res) => {
     try {
-      const { status = 'pending', limit = '50' } = req.query;
-      let query = supabase
+      const { limit = '200' } = req.query;
+
+      const { data, error } = await supabase
         .from('crm_tasks')
         .select('id, clinic_id, patient_id, task_type, reason, due_at, status, retry_count, last_error, message_template, created_at, executed_at, patients!inner(name, phone)')
         .eq('clinic_id', req.clinicId)
-        .order('due_at', { ascending: true })
+        .order('due_at', { ascending: false })
         .limit(Number(limit));
 
-      if (status !== 'all') query = query.eq('status', status);
-
-      const { data, error } = await query;
       if (error) {
         const { data: fb } = await supabase.from('vw_pending_tasks').select('*').eq('clinic_id', req.clinicId).limit(Number(limit));
         return res.json(fb || []);
       }
 
-      const normalized = (data || []).map(t => ({
+      const statusOrder = { pending: 0, failed: 1 };
+      const sorted = (data || []).sort((a, b) => {
+        const ao = statusOrder[a.status] ?? 2;
+        const bo = statusOrder[b.status] ?? 2;
+        if (ao !== bo) return ao - bo;
+        return new Date(b.due_at) - new Date(a.due_at);
+      });
+
+      const normalized = sorted.map(t => ({
         ...t,
         patient_name: t.patients?.name || 'Desconhecido',
         patient_phone: t.patients?.phone || '',
@@ -554,6 +560,52 @@ export function createCrmApiRouter(supabase) {
       return res.json({ success: true, message: 'Tarefa cancelada' });
     } catch (err) {
       console.error('[CRM-API] PUT /tasks/:id/cancel:', err.message);
+      return res.status(500).json({ error: 'Erro interno' });
+    }
+  });
+
+  // ======================================================
+  // 5E. ATUALIZAR STATUS DA TAREFA (F7A)
+  // ======================================================
+  router.patch('/tasks/:taskId/status', async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const { status } = req.body || {};
+
+      if (!['executed', 'cancelled'].includes(status)) {
+        return res.status(400).json({ error: 'Status inválido. Use: executed ou cancelled' });
+      }
+
+      const { data: task, error: findErr } = await supabase
+        .from('crm_tasks')
+        .select('id, status')
+        .eq('id', taskId)
+        .eq('clinic_id', req.clinicId)
+        .single();
+
+      if (findErr || !task) {
+        return res.status(404).json({ error: 'Tarefa não encontrada' });
+      }
+
+      const update = { status, updated_at: new Date().toISOString() };
+      if (status === 'executed') update.executed_at = new Date().toISOString();
+
+      const { data: updated, error: updateErr } = await supabase
+        .from('crm_tasks')
+        .update(update)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+
+      if (updateErr) {
+        console.error('[CRM-API] Erro ao atualizar status da tarefa:', updateErr.message);
+        return res.status(500).json({ error: 'Erro ao atualizar tarefa' });
+      }
+
+      console.log(`[CRM-API] Tarefa ${taskId} → ${status} por ${req.userName}`);
+      return res.json({ success: true, task: updated });
+    } catch (err) {
+      console.error('[CRM-API] PATCH /tasks/:id/status:', err.message);
       return res.status(500).json({ error: 'Erro interno' });
     }
   });

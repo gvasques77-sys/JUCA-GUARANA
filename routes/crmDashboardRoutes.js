@@ -927,6 +927,56 @@ export function createCrmApiRouter(supabase) {
   // ======================================================
   // 10B. TAGS DA CLÍNICA — CRUD (F9B)
   // ======================================================
+
+  // ======================================================
+  // 10A. NOTIFICAÇÕES / ATIVIDADE RECENTE (F9F)
+  // ======================================================
+  router.get('/notifications', async (req, res) => {
+    try {
+      var since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      var { data: events, error } = await supabase
+        .from('crm_events')
+        .select('id, event_type, occurred_at, source_system, payload, patient_id, patients!inner(name)')
+        .eq('clinic_id', req.clinicId)
+        .gte('occurred_at', since)
+        .order('occurred_at', { ascending: false })
+        .limit(30);
+
+      if (error) {
+        // Fallback sem join se patients relation falhar
+        var { data: evFb } = await supabase
+          .from('crm_events')
+          .select('id, event_type, occurred_at, source_system, payload, patient_id')
+          .eq('clinic_id', req.clinicId)
+          .gte('occurred_at', since)
+          .order('occurred_at', { ascending: false })
+          .limit(30);
+        events = evFb || [];
+      }
+
+      var recentThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      var recentCount = (events || []).filter(function(e) { return e.occurred_at >= recentThreshold; }).length;
+
+      var notifications = (events || []).map(function(e) {
+        return {
+          id: e.id,
+          event_type: e.event_type,
+          occurred_at: e.occurred_at,
+          patient_id: e.patient_id,
+          patient_name: e.patients ? e.patients.name : null,
+          source_system: e.source_system,
+          payload: e.payload,
+        };
+      });
+
+      return res.json({ notifications: notifications, recent_count: recentCount, total: notifications.length });
+    } catch (err) {
+      console.error('[CRM-API] /notifications:', err.message);
+      return res.json({ notifications: [], recent_count: 0, total: 0 });
+    }
+  });
+
   router.get('/tags', async (req, res) => {
     try {
       const { data } = await supabase

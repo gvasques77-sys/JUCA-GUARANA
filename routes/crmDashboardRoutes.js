@@ -22,6 +22,13 @@
  *
  * Melhorias F9C:
  * - GET    /analytics             — Inclui churn_alerts (até 10 pacientes em risco)
+ *
+ * Melhorias F9B:
+ * - GET    /tags                  — Listar tags da clínica
+ * - POST   /tags                  — Criar tag
+ * - GET    /patients/:id/tags     — Tags do paciente
+ * - POST   /patients/:id/tags     — Adicionar tag ao paciente
+ * - DELETE /patients/:id/tags/:tagId — Remover tag
  */
 
 import { Router } from 'express';
@@ -914,6 +921,107 @@ export function createCrmApiRouter(supabase) {
     } catch (err) {
       console.error('[CRM-API] /stages:', err.message);
       return res.json([]);
+    }
+  });
+
+  // ======================================================
+  // 10B. TAGS DA CLÍNICA — CRUD (F9B)
+  // ======================================================
+  router.get('/tags', async (req, res) => {
+    try {
+      const { data } = await supabase
+        .from('clinic_tags')
+        .select('id, name, color, created_at')
+        .eq('clinic_id', req.clinicId)
+        .order('name');
+      return res.json(data || []);
+    } catch (err) {
+      console.error('[CRM-API] /tags:', err.message);
+      return res.json([]);
+    }
+  });
+
+  router.post('/tags', async (req, res) => {
+    try {
+      const { name, color } = req.body || {};
+      if (!name || !name.trim()) return res.status(400).json({ error: 'Nome da tag obrigatório' });
+
+      const { data, error } = await supabase
+        .from('clinic_tags')
+        .insert({ clinic_id: req.clinicId, name: name.trim(), color: color || '#6E9FFF' })
+        .select('*')
+        .single();
+
+      if (error) {
+        if (error.code === '23505') return res.status(409).json({ error: 'Tag já existe' });
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.json({ success: true, tag: data });
+    } catch (err) {
+      console.error('[CRM-API] POST /tags:', err.message);
+      return res.status(500).json({ error: 'Erro interno' });
+    }
+  });
+
+  // ======================================================
+  // 10C. TAGS DO PACIENTE — Adicionar/Remover (F9B)
+  // ======================================================
+  router.get('/patients/:patientId/tags', async (req, res) => {
+    try {
+      const { data } = await supabase
+        .from('patient_tags')
+        .select('id, tag_id, clinic_tags(id, name, color)')
+        .eq('patient_id', req.params.patientId)
+        .eq('clinic_id', req.clinicId);
+
+      var tags = (data || []).map(function(pt) {
+        return { id: pt.id, tag_id: pt.tag_id, name: pt.clinic_tags ? pt.clinic_tags.name : '?', color: pt.clinic_tags ? pt.clinic_tags.color : '#6E9FFF' };
+      });
+      return res.json(tags);
+    } catch (err) {
+      console.error('[CRM-API] GET /patients/:id/tags:', err.message);
+      return res.json([]);
+    }
+  });
+
+  router.post('/patients/:patientId/tags', async (req, res) => {
+    try {
+      const { tag_id } = req.body || {};
+      if (!tag_id) return res.status(400).json({ error: 'tag_id obrigatório' });
+
+      const { data, error } = await supabase
+        .from('patient_tags')
+        .insert({ clinic_id: req.clinicId, patient_id: req.params.patientId, tag_id: tag_id })
+        .select('id, tag_id')
+        .single();
+
+      if (error) {
+        if (error.code === '23505') return res.json({ success: true, message: 'Tag já atribuída' });
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.json({ success: true, patient_tag: data });
+    } catch (err) {
+      console.error('[CRM-API] POST /patients/:id/tags:', err.message);
+      return res.status(500).json({ error: 'Erro interno' });
+    }
+  });
+
+  router.delete('/patients/:patientId/tags/:tagId', async (req, res) => {
+    try {
+      const { error } = await supabase
+        .from('patient_tags')
+        .delete()
+        .eq('patient_id', req.params.patientId)
+        .eq('tag_id', req.params.tagId)
+        .eq('clinic_id', req.clinicId);
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('[CRM-API] DELETE /patients/:id/tags:', err.message);
+      return res.status(500).json({ error: 'Erro interno' });
     }
   });
 

@@ -376,6 +376,9 @@ function PatientModal(p){
   var _saving=us(false),saving=_saving[0],sSaving=_saving[1];
   var _genRpt=us(false),genRpt=_genRpt[0],sGenRpt=_genRpt[1];
   var _rpt=us(null),rpt=_rpt[0],sRpt=_rpt[1];
+  var _ptags=us([]),ptags=_ptags[0],sPtags=_ptags[1];
+  var _ctags=us([]),ctags=_ctags[0],sCtags=_ctags[1];
+  var _showTagPicker=us(false),showTagPicker=_showTagPicker[0],sShowTagPicker=_showTagPicker[1];
   var isOwner=p.role==='owner';
 
   function load(){
@@ -383,8 +386,20 @@ function PatientModal(p){
       if(d){sD(d);sProf(d.profileExtra||{});if(d.lastReport)sRpt(d.lastReport)}
       sL(false);
     });
+    loadTags();
+  }
+  function loadTags(){
+    q('/patients/'+p.pid+'/tags').then(function(d){sPtags(d||[])});
+    q('/tags').then(function(d){sCtags(d||[])});
   }
   ue(function(){load()},[]);
+
+  function addTag(tagId){
+    q('/patients/'+p.pid+'/tags',{method:'POST',body:JSON.stringify({tag_id:tagId})}).then(function(r){if(r&&r.success)loadTags()});
+  }
+  function removeTag(tagId){
+    q('/patients/'+p.pid+'/tags/'+tagId,{method:'DELETE'}).then(function(r){if(r&&r.success)loadTags()});
+  }
 
   function saveProfile(){
     sSaving(true);
@@ -489,6 +504,37 @@ function PatientModal(p){
             h('div',{style:{fontSize:13,color:'var(--t3)'}},'Nenhuma consulta futura agendada')
           );
         })(),
+
+        // Tags do paciente (F9B)
+        h('div',{className:'card',style:{marginBottom:12}},
+          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
+            h('div',{style:{fontSize:12,fontWeight:600,color:'var(--t3)',textTransform:'uppercase',letterSpacing:'.04em'}},'\uD83C\uDFF7 Tags'),
+            h('button',{onClick:function(){sShowTagPicker(!showTagPicker)},style:{background:'none',border:'1px solid var(--bdr)',borderRadius:6,color:'var(--accent)',padding:'3px 10px',cursor:'pointer',fontSize:11,fontWeight:600,fontFamily:'Inter'}},showTagPicker?'Fechar':'+  Tag')
+          ),
+          h('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+            ptags.length===0?h('span',{style:{fontSize:12,color:'var(--t3)'}},'Nenhuma tag'):
+            ptags.map(function(t){
+              return h('span',{key:t.tag_id,className:'badge',style:{background:t.color+'20',color:t.color,cursor:'pointer',paddingRight:6,display:'inline-flex',alignItems:'center',gap:4}},
+                t.name,
+                h('span',{onClick:function(){removeTag(t.tag_id)},style:{marginLeft:2,cursor:'pointer',opacity:.6,fontWeight:700,fontSize:13}},'\u00d7')
+              );
+            })
+          ),
+          showTagPicker?h('div',{style:{marginTop:10,padding:10,background:'var(--bg)',borderRadius:8,border:'1px solid var(--bdr)'}},
+            h('div',{style:{fontSize:11,color:'var(--t3)',marginBottom:6}},'Adicionar tag:'),
+            h('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+              ctags.filter(function(ct){return !ptags.some(function(pt){return pt.tag_id===ct.id})}).map(function(ct){
+                return h('span',{key:ct.id,className:'badge',style:{background:ct.color+'20',color:ct.color,cursor:'pointer',transition:'all .15s'},
+                  onClick:function(){addTag(ct.id);sShowTagPicker(false)},
+                  onMouseOver:function(e){e.currentTarget.style.transform='scale(1.05)'},
+                  onMouseOut:function(e){e.currentTarget.style.transform='none'}},
+                  '+ '+ct.name
+                );
+              }),
+              ctags.filter(function(ct){return !ptags.some(function(pt){return pt.tag_id===ct.id})}).length===0?h('span',{style:{fontSize:11,color:'var(--t3)'}},'Todas as tags atribu\u00eddas'):null
+            )
+          ):null
+        ),
 
         // A\u00e7\u00f5es r\u00e1pidas
         h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
@@ -859,7 +905,7 @@ function App(){
             h('span',{className:'badge',style:{background:isOwner?'rgba(52,211,153,.1)':'rgba(139,92,246,.1)',color:isOwner?'#34D399':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,fontFamily:'Inter'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.1 F9C')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.2 F9B')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:32,overflowY:'auto',maxHeight:'100vh',position:'relative'}},

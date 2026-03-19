@@ -180,6 +180,7 @@ function renderChart(id,type,data,opts){
 /* ===== TELA 1: VIS\u00c3O GERAL + ANALYTICS ===== */
 function T1(p){
   var _o=us(null),ov=_o[0],sO=_o[1];var _f=us([]),fn=_f[0],sF=_f[1];var _a=us(null),an=_a[0],sA=_a[1];var _l=us(true),ld=_l[0],sL=_l[1];
+  var _churnExp=us(false),churnExpanded=_churnExp[0],sChurnExp=_churnExp[1];
   var isOwner=p.role==='owner';
   function load(){Promise.all([q('/overview'),q('/funnel'),q('/analytics')]).then(function(r){sO(r[0]);sF(r[1]||[]);sA(r[2]);sL(false);})}
   useRefresh(load,15000);
@@ -257,6 +258,39 @@ function T1(p){
         return h('div',{key:i,className:'insight '+cls},h('span',null,icon),ins.text);
       })
     ):null,
+
+    /* F9C: Pacientes em Risco de Churn */
+    (a.churn_alerts||[]).length>0?h('div',{className:'card fi',style:{marginBottom:20,borderLeft:'3px solid var(--rose)'}},
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},
+        h('h3',{style:{fontSize:15,fontWeight:600,display:'flex',alignItems:'center',gap:8}},
+          h('span',{className:'pulse',style:{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--rose)'}}),
+          'Pacientes em Risco'
+        ),
+        h('span',{className:'badge',style:{background:'rgba(244,63,94,.12)',color:'var(--rose)'}},(a.churn_alerts||[]).length+' alerta'+(a.churn_alerts.length>1?'s':''))
+      ),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:8}},(churnExpanded?a.churn_alerts:(a.churn_alerts||[]).slice(0,5)).map(function(c,i){
+        var isHigh=c.risk==='high';
+        var riskColor=isHigh?'var(--rose)':'var(--amber)';
+        return h('div',{key:c.patient_id||i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'var(--bg)',borderRadius:10,cursor:'pointer',transition:'all .18s',border:'1px solid var(--bdr)'},
+          onClick:function(){if(p.onOpenPatient)p.onOpenPatient(c.patient_id,c.patient_name)},
+          onMouseOver:function(e){e.currentTarget.style.borderColor='var(--bdr-h)';e.currentTarget.style.transform='translateY(-1px)'},
+          onMouseOut:function(e){e.currentTarget.style.borderColor='var(--bdr)';e.currentTarget.style.transform='none'}},
+          h('div',{style:{flex:1,minWidth:0}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:8}},
+              h('span',{style:{fontSize:14,fontWeight:600,color:'var(--t1)'}},c.patient_name),
+              h('span',{className:'badge',style:{background:isHigh?'rgba(244,63,94,.12)':'rgba(251,191,36,.12)',color:riskColor,fontSize:10}},isHigh?'ALTO':'M\u00c9DIO')
+            ),
+            h('div',{style:{fontSize:12,color:'var(--t3)',marginTop:3}},c.reason)
+          ),
+          h('div',{style:{textAlign:'right',flexShrink:0,marginLeft:12}},
+            h('div',{style:{fontSize:11,color:riskColor,fontWeight:600}},c.suggestion),
+            c.phone?h('a',{href:'tel:'+c.phone,onClick:function(e){e.stopPropagation()},style:{fontSize:11,color:'var(--accent)',textDecoration:'none'}},'\uD83D\uDCDE Ligar'):null
+          )
+        );
+      })),
+      (a.churn_alerts||[]).length>5?h('button',{onClick:function(){sChurnExp(!churnExpanded)},style:{marginTop:10,background:'none',border:'1px solid var(--bdr)',borderRadius:8,color:'var(--accent)',padding:'8px 16px',cursor:'pointer',fontSize:12,fontWeight:600,fontFamily:'Inter',width:'100%',transition:'all .18s'}},churnExpanded?'Mostrar menos':'Ver todos os '+(a.churn_alerts||[]).length+' alertas'):null
+    ):null,
+
     isOwner&&(a.ranking_medicos||[]).length>0?h('div',{className:'card',style:{marginBottom:20}},
       h('h3',{style:{fontSize:15,fontWeight:600,marginBottom:12}},'\uD83D\uDC68\u200D\u2695\uFE0F Ranking por M\u00e9dico'),
       h('table',null,
@@ -794,13 +828,13 @@ function App(){
   ];
 
   function page(){
-    if(pg==='overview')return h(T1,{role:role});
+    if(pg==='overview')return h(T1,{role:role,onOpenPatient:onOpenPatient});
     if(pg==='patients')return h(T2,{onSel:onSel,role:role});
     if(pg==='timeline'&&sel)return h(T3,{pid:sel.id,pn:sel.n,onBack:function(){sP('patients')}});
     if(pg==='tasks')return h(T4,{taskSummary:taskSum,onOpenPatient:onOpenPatient,role:role});
     if(pg==='agenda')return h(T5);
     if(pg==='report')return h(T6,{role:role});
-    return h(T1,{role:role});
+    return h(T1,{role:role,onOpenPatient:onOpenPatient});
   }
 
   return h('div',null,
@@ -825,7 +859,7 @@ function App(){
             h('span',{className:'badge',style:{background:isOwner?'rgba(52,211,153,.1)':'rgba(139,92,246,.1)',color:isOwner?'#34D399':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,fontFamily:'Inter'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.0 Premium')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.1 F9C')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:32,overflowY:'auto',maxHeight:'100vh',position:'relative'}},

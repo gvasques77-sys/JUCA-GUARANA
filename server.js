@@ -17,6 +17,7 @@ import { startTaskProcessor } from './services/taskProcessor.js';
 import { createCrmApiRouter } from './routes/crmDashboardRoutes.js';
 
 
+
 // ======================================================
 // STATE MACHINE — Estados explícitos do fluxo de agendamento
 // ======================================================
@@ -227,6 +228,8 @@ const supabase = createClient(
 
 // — CRM Dashboard API (montada aqui porque depende do supabase client) —
 app.use('/crm/api', createCrmApiRouter(supabase));
+
+
 
 // ======================================================
 // SCHEMA DE VALIDAÇÃO (Zod)
@@ -3922,7 +3925,12 @@ console.log('📊 Estado após merge:', JSON.stringify(updatedState, null, 2));
 // ======================================================
 // INICIAR SERVIDOR
 // ======================================================
-app.listen(PORT, () => {
+app.get("/health", async (req, res) => {
+  const redisStatus = await redisHealthCheck();
+  res.json({ ok: true, service: "agent-service", redis: redisStatus });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
   log.info({ port: PORT }, '🚀 agent-service listening');
 
   // — CRM Fase 3: Iniciar Task Processor (varredura de crm_tasks pendentes) —

@@ -819,6 +819,8 @@ function App(){
   var _modal=us(null),modal=_modal[0],sModal=_modal[1];
   var _ts=us(null),taskSum=_ts[0],sTS=_ts[1];
   var _ready=us(false),ready=_ready[0],sReady=_ready[1];
+  var _notif=us({notifications:[],recent_count:0}),notif=_notif[0],sNotif=_notif[1];
+  var _notifOpen=us(false),notifOpen=_notifOpen[0],sNotifOpen=_notifOpen[1];
 
   // Auth check on load — usa sessão do Supabase client
   ue(function(){
@@ -843,6 +845,13 @@ function App(){
     if(!ready)return;
     function loadTS(){q('/tasks/summary').then(function(d){if(d)sTS(d)})}
     loadTS();var iv=setInterval(loadTS,15000);return function(){clearInterval(iv)};
+  },[ready]);
+
+  // F9F: Load notifications
+  ue(function(){
+    if(!ready)return;
+    function loadNotif(){q('/notifications').then(function(d){if(d)sNotif(d)})}
+    loadNotif();var iv2=setInterval(loadNotif,30000);return function(){clearInterval(iv2)};
   },[ready]);
 
   function onSel(id,nm){sModal({id:id,n:nm})}
@@ -899,17 +908,52 @@ function App(){
             it.badge?h('span',{className:'task-badge'},it.badge):null
           );
         })),
+
+        // F9F: Notification bell
+        h('div',{style:{padding:'12px 8px',marginTop:12,borderTop:'1px solid var(--bdr)'}},
+          h('button',{onClick:function(){sNotifOpen(!notifOpen)},style:{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 12px',background:notifOpen?'rgba(110,159,255,.1)':'none',border:'1px solid '+(notifOpen?'rgba(110,159,255,.2)':'var(--bdr)'),borderRadius:8,cursor:'pointer',transition:'all .18s',color:notifOpen?'var(--accent)':'var(--t2)',fontFamily:'Inter',fontSize:13,fontWeight:500}},
+            h('span',null,'\uD83D\uDD14 Atividade'),
+            notif.recent_count>0?h('span',{style:{minWidth:18,height:18,borderRadius:9,background:'var(--accent)',color:'#fff',fontSize:10,fontWeight:700,display:'inline-flex',alignItems:'center',justifyContent:'center',padding:'0 5px',animation:'pulse 2s infinite'}},notif.recent_count):null
+          )
+        ),
+
         h('div',{className:'sft',style:{marginTop:'auto',padding:'14px 10px',borderTop:'1px solid var(--bdr)'}},
           h('div',{style:{fontSize:13,fontWeight:600,color:'var(--t1)',marginBottom:6}},userName),
           h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
             h('span',{className:'badge',style:{background:isOwner?'rgba(52,211,153,.1)':'rgba(139,92,246,.1)',color:isOwner?'#34D399':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,fontFamily:'Inter'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.2 F9B')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.3 F9F')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:32,overflowY:'auto',maxHeight:'100vh',position:'relative'}},
         h('div',{className:'spotlight'}),
+
+        // F9F: Notification panel
+        notifOpen?h('div',{className:'fi',style:{position:'fixed',top:0,right:0,width:360,maxWidth:'90vw',height:'100vh',background:'var(--bg2)',borderLeft:'1px solid var(--bdr)',zIndex:999,display:'flex',flexDirection:'column',boxShadow:'-8px 0 32px rgba(0,0,0,.5)'}},
+          h('div',{style:{padding:'20px 20px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+            h('h3',{style:{fontSize:16,fontWeight:700}},'\uD83D\uDD14 Atividade Recente'),
+            h('button',{onClick:function(){sNotifOpen(false)},style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:20,fontFamily:'Inter'}},'\u00D7')
+          ),
+          h('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
+            (notif.notifications||[]).length===0?h(Em,{m:'Nenhuma atividade nas \u00faltimas 24h',i:'\uD83D\uDD14'}):
+            (notif.notifications||[]).map(function(n,i){
+              var isRecent=new Date(n.occurred_at)>new Date(Date.now()-2*60*60*1000);
+              return h('div',{key:n.id||i,style:{display:'flex',gap:10,padding:'10px 0',borderBottom:'1px solid var(--bdr)',cursor:n.patient_id?'pointer':'default',opacity:isRecent?1:.7},
+                onClick:function(){if(n.patient_id&&n.patient_name){onOpenPatient(n.patient_id,n.patient_name);sNotifOpen(false)}}},
+                h('div',{style:{width:32,height:32,borderRadius:8,background:'var(--card)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}},EI[n.event_type]||'\uD83D\uDCCC'),
+                h('div',{style:{flex:1,minWidth:0}},
+                  h('div',{style:{fontSize:13,fontWeight:500,color:'var(--t1)'}},EL[n.event_type]||n.event_type),
+                  n.patient_name?h('div',{style:{fontSize:12,color:'var(--accent)',marginTop:2}},n.patient_name):null,
+                  h('div',{style:{fontSize:11,color:'var(--t3)',marginTop:2}},ago(n.occurred_at)+' \u2022 '+fmtSrc(n.source_system))
+                ),
+                isRecent?h('div',{style:{width:6,height:6,borderRadius:3,background:'var(--accent)',flexShrink:0,marginTop:6}}):null
+              );
+            })
+          ),
+          h('div',{style:{padding:'12px 16px',borderTop:'1px solid var(--bdr)',fontSize:11,color:'var(--t3)',textAlign:'center'}},notif.total+' eventos nas \u00faltimas 24h')
+        ):null,
+
         page()
       )
     )

@@ -19,6 +19,9 @@
  *
  * Melhorias F9A:
  * - GET    /analytics             — Inclui weekly_timeline (últimas 8 semanas)
+ *
+ * Melhorias F9C:
+ * - GET    /analytics             — Inclui churn_alerts (até 10 pacientes em risco)
  */
 
 import { Router } from 'express';
@@ -781,6 +784,70 @@ export function createCrmApiRouter(supabase) {
         });
       }
 
+      // F9C: Churn risk detection
+      var churn_alerts = [];
+      try {
+        var { data: crmPatients } = await supabase
+          .from('vw_patient_crm_full')
+          .select('patient_id, patient_name, phone, current_stage, lead_score, last_contact_at, total_appointments')
+          .eq('clinic_id', req.clinicId);
+
+        var { data: futureAppts } = await supabase
+          .from('appointments')
+          .select('patient_id')
+          .eq('clinic_id', req.clinicId)
+          .in('status', ['scheduled', 'confirmed'])
+          .gte('appointment_date', new Date().toISOString().split('T')[0]);
+
+        var futureSet = {};
+        (futureAppts || []).forEach(function(a) { futureSet[a.patient_id] = true; });
+
+        var noShowMap = {};
+        all.forEach(function(a) {
+          if (a.status === 'no_show') {
+            noShowMap[a.patient_id] = (noShowMap[a.patient_id] || 0) + 1;
+          }
+        });
+
+        (crmPatients || []).forEach(function(p) {
+          if (futureSet[p.patient_id]) return;
+          var daysSince = p.last_contact_at ? Math.floor((Date.now() - new Date(p.last_contact_at).getTime()) / 86400000) : 999;
+          var score = p.lead_score || 0;
+          var noShows = noShowMap[p.patient_id] || 0;
+          var risk = null;
+          var reason = '';
+
+          if (daysSince > 30 || score < 20) {
+            risk = 'high';
+            reason = daysSince > 30 ? 'Sem contato ha ' + daysSince + ' dias' : 'Lead score muito baixo (' + score + ')';
+          } else if (daysSince > 14 || (noShows > 0 && daysSince > 7)) {
+            risk = 'medium';
+            reason = noShows > 0 ? noShows + ' no-show(s), ' + daysSince + 'd sem contato' : 'Sem contato ha ' + daysSince + ' dias';
+          }
+
+          if (risk) {
+            churn_alerts.push({
+              patient_id: p.patient_id,
+              patient_name: p.patient_name,
+              phone: p.phone,
+              risk: risk,
+              reason: reason,
+              days_since_contact: daysSince,
+              lead_score: score,
+              stage: p.current_stage,
+              suggestion: risk === 'high' ? 'Reativacao urgente' : 'Acompanhamento recomendado',
+            });
+          }
+        });
+
+        churn_alerts.sort(function(a, b) {
+          if (a.risk !== b.risk) return a.risk === 'high' ? -1 : 1;
+          return b.days_since_contact - a.days_since_contact;
+        });
+      } catch (churnErr) {
+        console.warn('[CRM-API] Erro ao calcular churn:', churnErr.message);
+      }
+
       const result = {
         resumo: {
           total_agendamentos:total, agendamentos_ativos:ativos, concluidos:concluidos,
@@ -796,6 +863,7 @@ export function createCrmApiRouter(supabase) {
         ranking_medicos: ranking_medicos,
         insights: insights,
         weekly_timeline: weekly_timeline,
+        churn_alerts: churn_alerts,
       };
 
       // Staff não vê dados financeiros

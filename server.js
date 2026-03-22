@@ -15,6 +15,8 @@ import { getOrCreateConversation, updateConversationTurn, finalizeConversation }
 import { processPostConversation } from './services/crmService.js';
 import { startTaskProcessor } from './services/taskProcessor.js';
 import { createCrmApiRouter } from './routes/crmDashboardRoutes.js';
+import campaignRoutes from './routes/campaignRoutes.js';
+import { startCampaignScheduler } from './services/campaignService.js';
 
 
 
@@ -225,6 +227,10 @@ const supabase = createClient(
   SUPABASE_SERVICE_ROLE_KEY || 'missing',
   { auth: { persistSession: false } }
 );
+
+// — F9D: Campaign API (must be before generic CRM routes) —
+import { authMiddleware } from './middleware/authMiddleware.js';
+app.use('/crm/api/campaigns', authMiddleware(supabase), campaignRoutes);
 
 // — CRM Dashboard API (montada aqui porque depende do supabase client) —
 app.use('/crm/api', createCrmApiRouter(supabase));
@@ -3939,5 +3945,12 @@ app.listen(PORT, "0.0.0.0", () => {
     startTaskProcessor(supabase);
   } catch (err) {
     log.warn({ err: err.message }, '[TASK-PROCESSOR] Falha ao iniciar — server continua sem processor');
+  }
+
+  // — F9D: Campaign Scheduler (verifica campanhas agendadas a cada 30s) —
+  try {
+    startCampaignScheduler();
+  } catch (err) {
+    log.warn({ err: err.message }, '[CampaignScheduler] Falha ao iniciar — server continua sem scheduler');
   }
 });

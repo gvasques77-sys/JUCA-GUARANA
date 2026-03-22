@@ -24,6 +24,8 @@ const DEFAULT_INTERVAL_MS = 60_000; // 1 minuto
 const BATCH_SIZE = 10; // processar no máximo 10 tarefas por ciclo
 
 // Status possíveis das tarefas
+import { getClinicWhatsAppConfig } from './whatsappConfigHelper.js';
+
 const TASK_STATUS = {
   PENDING: 'pending',
   PROCESSING: 'processing',
@@ -57,16 +59,16 @@ const TASK_STATUS = {
  */
 async function sendWhatsAppMessage(patientPhone, message, options = {}) {
   try {
-    const whatsappToken  = process.env.META_WA_TOKEN;
-    const phoneNumberId  = process.env.META_PHONE_NUMBER_ID;
-    const apiVersion     = process.env.META_API_VERSION || 'v21.0';
-
-    // Se não há credenciais configuradas, modo simulação
-    if (!whatsappToken || !phoneNumberId) {
-      console.log(`[TASK-PROCESSOR] [SIMULAÇÃO] Mensagem para ${patientPhone}: "${message.substring(0, 80)}..."`);
-      console.log(`[TASK-PROCESSOR] Para ativar envio real, configure META_WA_TOKEN e META_PHONE_NUMBER_ID no Railway`);
+    // Multi-tenant: buscar credenciais da clínica via whatsappConfigHelper
+    const config = await getClinicWhatsAppConfig(options.clinicId);
+    if (!config) {
+      console.log(`[TASK-PROCESSOR] [SIMULAÇÃO] Sem config WhatsApp para clínica ${options.clinicId || 'N/A'} — Mensagem para ${patientPhone}: "${message.substring(0, 80)}..."`);
       return { success: true, simulated: true, message: 'Credenciais WhatsApp não configuradas — modo simulação' };
     }
+
+    const whatsappToken  = config.access_token;
+    const phoneNumberId  = config.phone_number_id;
+    const apiVersion     = process.env.META_API_VERSION || 'v21.0';
 
     // === ENVIO REAL VIA META WHATSAPP API ===
     const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;

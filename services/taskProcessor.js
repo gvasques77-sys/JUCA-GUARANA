@@ -32,7 +32,7 @@ const TASK_STATUS = {
   COMPLETED: 'completed',
   FAILED: 'failed',
   SKIPPED: 'skipped',
-  CANCELED: 'canceled',
+  CANCELED: 'cancelled',
 };
 
 // ======================================================

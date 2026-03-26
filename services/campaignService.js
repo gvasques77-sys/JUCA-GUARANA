@@ -146,7 +146,11 @@ async function resolveAudience(clinicId, segmentId) {
 async function resolveSegmentPatients(clinicId, filters) {
   let query = sb.from('patients').select('id, name, phone').eq('clinic_id', clinicId).not('phone', 'is', null).neq('phone', '');
   if (filters && filters.tags && filters.tags.length > 0) {
-    const { data: taggedPatients } = await sb.from('patient_tags').select('patient_id').eq('clinic_id', clinicId).in('tag_name', filters.tags);
+    // Resolver nomes de tags -> IDs via clinic_tags (patient_tags usa tag_id como FK)
+    const { data: tagRows } = await sb.from('clinic_tags').select('id').eq('clinic_id', clinicId).in('name', filters.tags);
+    const tagIds = (tagRows || []).map(function(t) { return t.id; });
+    if (tagIds.length === 0) { return []; }
+    const { data: taggedPatients } = await sb.from('patient_tags').select('patient_id').eq('clinic_id', clinicId).in('tag_id', tagIds);
     if (taggedPatients && taggedPatients.length > 0) {
       const patientIds = Array.from(new Set(taggedPatients.map(function(t) { return t.patient_id; })));
       query = query.in('id', patientIds);

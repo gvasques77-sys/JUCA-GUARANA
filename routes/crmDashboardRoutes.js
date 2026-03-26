@@ -593,8 +593,8 @@ export function createCrmApiRouter(supabase) {
       const { taskId } = req.params;
       const { status } = req.body || {};
 
-      if (!['executed', 'cancelled'].includes(status)) {
-        return res.status(400).json({ error: 'Status inválido. Use: executed ou cancelled' });
+      if (!['manual_completed', 'cancelled'].includes(status)) {
+        return res.status(400).json({ error: 'Status inválido. Use: manual_completed ou cancelled' });
       }
 
       const { data: task, error: findErr } = await supabase
@@ -608,12 +608,12 @@ export function createCrmApiRouter(supabase) {
         return res.status(404).json({ error: 'Tarefa não encontrada' });
       }
 
-      if (['completed', 'manual_completed', 'cancelled', 'executed'].includes(task.status)) {
+      if (['completed', 'manual_completed', 'cancelled'].includes(task.status)) {
         return res.json({ success: true, message: 'Tarefa já finalizada', task });
       }
 
       const update = { status, updated_at: new Date().toISOString() };
-      if (status === 'executed') update.executed_at = new Date().toISOString();
+      if (status === 'manual_completed') update.executed_at = new Date().toISOString();
 
       const { data: updated, error: updateErr } = await supabase
         .from('crm_tasks')
@@ -873,12 +873,16 @@ export function createCrmApiRouter(supabase) {
         churn_alerts: churn_alerts,
       };
 
-      // Staff não vê dados financeiros
+      // Staff não vê dados financeiros nem telefones de pacientes (LGPD)
       if (req.userRole !== 'owner') {
         result.resumo.receita_bruta = undefined;
         result.resumo.receita_efetiva = undefined;
         result.resumo.ticket_medio = undefined;
         result.ranking_medicos = result.ranking_medicos.map(m => ({ ...m, receita: undefined }));
+        result.churn_alerts = result.churn_alerts.map(function(a) {
+          var { phone, ...rest } = a;
+          return rest;
+        });
       }
 
       return res.json(result);

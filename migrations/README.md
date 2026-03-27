@@ -11,6 +11,7 @@ Para aplicar em um novo ambiente, execute na ordem numérica via Supabase SQL Ed
 | `001_f9b_tags.sql` | Tags de clínica e pacientes (F9B) | Sim |
 | `002_f9d_campaigns.sql` | Campanhas WhatsApp multi-tenant (F9D) | Sim |
 | `003_crm_segments_pending.sql` | Segmentos de audiência | **NÃO** — pendente |
+| `004_codex_review_fixes.sql` | CASCADE FK + unique index WhatsApp config | **NÃO** — aplicar manualmente |
 
 ## Views existentes (não documentadas aqui)
 

@@ -811,6 +811,339 @@ function T6(p){
   );
 }
 
+/* ===== TELA 7: FINANCEIRO (F10) ===== */
+var EXPENSE_CATS={salarios:{label:'Sal\u00e1rios e Encargos',color:'#6E9FFF'},aluguel:{label:'Aluguel',color:'#8B5CF6'},energia:{label:'Energia El\u00e9trica',color:'#FBBF24'},agua:{label:'\u00c1gua',color:'#06B6D4'},telefone_internet:{label:'Telefone / Internet',color:'#6E9FFF'},material_descartavel:{label:'Material Descart\u00e1vel',color:'#34D399'},impostos:{label:'Impostos',color:'#F43F5E'},marketing:{label:'Marketing',color:'#FBBF24'},software:{label:'Software / Sistemas',color:'#6E9FFF'},equipamentos:{label:'Equipamentos',color:'#8B5CF6'},manutencao:{label:'Manuten\u00e7\u00e3o',color:'#FBBF24'},contabilidade:{label:'Contabilidade',color:'#6E9FFF'},seguros:{label:'Seguros',color:'#34D399'},outros:{label:'Outros',color:'rgba(255,255,255,.36)'}};
+var RECURRENCE_LABELS={monthly:'Mensal',one_time:'\u00danico',weekly:'Semanal',annual:'Anual'};
+
+function FinancialPage(p){
+  var _tab=us('overview'),tab=_tab[0],sTab=_tab[1];
+  var _ov=us(null),fov=_ov[0],sFov=_ov[1];
+  var _docs=us([]),docs=_docs[0],sDocs=_docs[1];
+  var _tl=us([]),tl=_tl[0],sTl=_tl[1];
+  var _exp=us({expenses:[],total:0}),exp=_exp[0],sExp=_exp[1];
+  var _dre=us(null),dre=_dre[0],sDre=_dre[1];
+  var _hs=us(null),hs=_hs[0],sHs=_hs[1];
+  var _ld=us(true),ld=_ld[0],sLd=_ld[1];
+  var _mo=us(null),mo=_mo[0],sMo=_mo[1];
+  var _ef=us({}),ef=_ef[0],sEf=_ef[1];
+  var _saving=us(false),saving=_saving[0],sSaving=_saving[1];
+
+  var now=new Date();
+  var _cm=us(now.getFullYear()+'-'+(now.getMonth()+1<10?'0':'')+(now.getMonth()+1)),cm=_cm[0],sCm=_cm[1];
+
+  function loadOverview(){
+    sLd(true);
+    Promise.all([
+      q('/financial/overview?period=month'),
+      q('/financial/revenue-by-doctor?period=month'),
+      q('/financial/revenue-timeline?months=6')
+    ]).then(function(r){
+      sFov(r[0]);sDocs(r[1]||[]);sTl(r[2]||[]);sLd(false);
+    }).catch(function(){sLd(false)});
+  }
+
+  function loadExpenses(){
+    q('/financial/expenses?month='+cm).then(function(d){if(d)sExp(d)});
+  }
+
+  function loadDRE(){
+    Promise.all([
+      q('/financial/dre?month='+cm),
+      q('/financial/health-score')
+    ]).then(function(r){sDre(r[0]);sHs(r[1])});
+  }
+
+  ue(function(){loadOverview()},[]);
+  ue(function(){if(tab==='expenses')loadExpenses()},[tab,cm]);
+  ue(function(){if(tab==='dre')loadDRE()},[tab,cm]);
+
+  // Render charts when overview data loads
+  ue(function(){
+    if(ld||!tl||tl.length===0)return;
+    renderChart('fin-timeline','line',{
+      labels:tl.map(function(m){return m.month}),
+      datasets:[
+        {label:'Receita Total',data:tl.map(function(m){return m.revenue}),borderColor:'#34D399',backgroundColor:'rgba(52,211,153,.08)',fill:true,tension:0.4,borderWidth:2,pointRadius:4,pointBackgroundColor:'#34D399',pointBorderColor:'#070A0F',pointBorderWidth:2},
+        {label:'Receita Rob\u00f4',data:tl.map(function(m){return m.revenueBot}),borderColor:'#6E9FFF',backgroundColor:'rgba(110,159,255,.06)',fill:true,tension:0.4,borderWidth:2,pointRadius:3,pointBackgroundColor:'#6E9FFF',pointBorderColor:'#070A0F',pointBorderWidth:2}
+      ]
+    },{plugins:{legend:{position:'bottom'}}});
+
+    if(fov){
+      renderChart('fin-composition','doughnut',{
+        labels:['Rob\u00f4 (WhatsApp)','Manual'],
+        datasets:[{data:[fov.revenueBot||0,fov.revenueManual||0],backgroundColor:['#6E9FFF','#8B5CF6'],borderColor:'#111827',borderWidth:2,hoverOffset:6}]
+      },{cutout:'68%',plugins:{legend:{position:'bottom',labels:{padding:12}}}});
+    }
+
+    if(docs&&docs.length>0){
+      var top5=docs.slice(0,5);
+      renderChart('fin-doctors','bar',{
+        labels:top5.map(function(d){return d.doctor_name?d.doctor_name.split(' ')[0]:'Dr.'}),
+        datasets:[{label:'Receita (R$)',data:top5.map(function(d){return d.revenue}),backgroundColor:'rgba(52,211,153,.5)',borderColor:'#34D399',borderWidth:1,borderRadius:8,barPercentage:0.6}]
+      },{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'rgba(255,255,255,.35)',font:{family:'Inter',size:11},callback:function(v){return'R$ '+Number(v).toLocaleString('pt-BR')}},border:{display:false},beginAtZero:true},y:{grid:{display:false},ticks:{color:'rgba(255,255,255,.6)',font:{family:'Inter',size:12}},border:{display:false}}}});
+    }
+  });
+
+  function changeMonth(dir){
+    var parts=cm.split('-');var y=parseInt(parts[0]);var m=parseInt(parts[1])+dir;
+    if(m<1){m=12;y--}if(m>12){m=1;y++}
+    sCm(y+'-'+(m<10?'0':'')+m);
+  }
+
+  function monthLabel(mk){
+    var meses=['','Janeiro','Fevereiro','Mar\u00e7o','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    var parts=mk.split('-');return meses[parseInt(parts[1])]+' '+parts[0];
+  }
+
+  function openExpenseModal(expense){
+    if(expense){sEf({category:expense.category,description:expense.description||'',amount:expense.amount,recurrence:expense.recurrence,reference_month:expense.reference_month,id:expense.id})}
+    else{sEf({category:'',description:'',amount:'',recurrence:'monthly',reference_month:cm})}
+    sMo('expense');
+  }
+
+  function saveExpense(){
+    if(!ef.category||!ef.amount||parseFloat(ef.amount)<=0)return;
+    sSaving(true);
+    var isEdit=!!ef.id;
+    var url=isEdit?'/financial/expenses/'+ef.id:'/financial/expenses';
+    var method=isEdit?'PUT':'POST';
+    q(url,{method:method,body:JSON.stringify({category:ef.category,description:ef.description,amount:parseFloat(ef.amount),recurrence:ef.recurrence,reference_month:ef.reference_month||cm})}).then(function(){
+      sMo(null);sSaving(false);loadExpenses();
+    }).catch(function(){sSaving(false)});
+  }
+
+  function deleteExpense(id){
+    if(!confirm('Remover esta despesa?'))return;
+    q('/financial/expenses/'+id,{method:'DELETE'}).then(function(){loadExpenses()});
+  }
+
+  if(ld&&tab==='overview')return h('div',{className:'fi'},h(Ld));
+
+  var tabs=[{id:'overview',l:'Vis\u00e3o Geral'},{id:'expenses',l:'Despesas'},{id:'dre',l:'DRE & Sa\u00fade'}];
+
+  return h('div',{className:'fi'},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+      h('h2',{style:{fontSize:22,fontWeight:700}},'\uD83D\uDCB0 Financeiro')
+    ),
+
+    // Tab bar
+    h('div',{className:'tab-bar'},tabs.map(function(t){
+      return h('button',{key:t.id,className:'tab-btn'+(tab===t.id?' active':''),onClick:function(){sTab(t.id)}},t.l);
+    })),
+
+    // TAB 1: Overview
+    tab==='overview'?h('div',null,
+      // KPI cards
+      h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginBottom:20}},
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Receita do M\u00eas'),
+          h('div',{className:'kpi-value',style:{color:'#34D399'}},cur(fov?fov.totalRevenue:0)),
+          fov&&fov.deltas?h('div',{style:{fontSize:11,color:fov.deltas.revenue>=0?'#34D399':'#F43F5E',marginTop:6}},(fov.deltas.revenue>=0?'\u2191':'\u2193')+Math.abs(fov.deltas.revenue)+'% vs anterior'):null
+        ),
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Receita Rob\u00f4'),
+          h('div',{className:'kpi-value',style:{color:'#6E9FFF'}},cur(fov?fov.revenueBot:0)),
+          h('div',{style:{fontSize:11,color:'var(--t3)',marginTop:6}},(fov?fov.revenueBotPercent:0)+'% do total')
+        ),
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Ticket M\u00e9dio'),
+          h('div',{className:'kpi-value',style:{color:'#FBBF24'}},cur(fov?fov.avgTicket:0))
+        ),
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Perdas Cancelamento'),
+          h('div',{className:'kpi-value',style:{color:'#F43F5E'}},cur(fov?fov.lostCancellation:0)),
+          h('div',{style:{fontSize:11,color:'var(--t3)',marginTop:6}},(fov?fov.totalCancellations:0)+' cancelamentos')
+        ),
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Custo IA'),
+          h('div',{className:'kpi-value',style:{color:'#06B6D4'}},cur(fov?fov.aiCost:0))
+        ),
+        h('div',{className:'card fi',style:{padding:'20px 24px'}},
+          h('div',{className:'kpi-label'},'Lucro Estimado'),
+          h('div',{className:'kpi-value',style:{color:fov&&(fov.totalRevenue-fov.aiCost)>0?'#34D399':'#F43F5E'}},cur(fov?(fov.totalRevenue-(fov.aiCost||0)):0))
+        )
+      ),
+
+      // Charts
+      h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12,marginBottom:20}},
+        h('div',{className:'card'},
+          h('h3',{style:{fontSize:14,fontWeight:600,marginBottom:12,color:'var(--t2)'}},'Evolu\u00e7\u00e3o de Receita (6 meses)'),
+          h('div',{style:{height:240,position:'relative'}},h('canvas',{id:'fin-timeline'}))
+        ),
+        h('div',{className:'card'},
+          h('h3',{style:{fontSize:14,fontWeight:600,marginBottom:12,color:'var(--t2)'}},'Rob\u00f4 vs Manual'),
+          h('div',{style:{height:240,position:'relative'}},h('canvas',{id:'fin-composition'}))
+        )
+      ),
+      docs&&docs.length>0?h('div',{className:'card',style:{marginBottom:20}},
+        h('h3',{style:{fontSize:14,fontWeight:600,marginBottom:12,color:'var(--t2)'}},'Top M\u00e9dicos por Receita'),
+        h('div',{style:{height:Math.max(180,docs.slice(0,5).length*50),position:'relative'}},h('canvas',{id:'fin-doctors'}))
+      ):null
+    ):null,
+
+    // TAB 2: Expenses
+    tab==='expenses'?h('div',null,
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}},
+        h('div',{style:{display:'flex',alignItems:'center',gap:12}},
+          h('button',{onClick:function(){changeMonth(-1)},style:{background:'none',border:'1px solid var(--bdr)',borderRadius:8,color:'var(--t1)',cursor:'pointer',padding:'6px 12px',fontSize:14,fontFamily:'Inter'}},'\u2190'),
+          h('span',{style:{fontSize:16,fontWeight:600,minWidth:160,textAlign:'center'}},monthLabel(cm)),
+          h('button',{onClick:function(){changeMonth(1)},style:{background:'none',border:'1px solid var(--bdr)',borderRadius:8,color:'var(--t1)',cursor:'pointer',padding:'6px 12px',fontSize:14,fontFamily:'Inter'}},'\u2192')
+        ),
+        h('button',{className:'btn',onClick:function(){openExpenseModal(null)}},'\u002B Adicionar Despesa')
+      ),
+      exp.expenses.length===0?h('div',{className:'card'},h(Em,{m:'Nenhuma despesa registrada para '+monthLabel(cm),i:'\uD83D\uDCB8'})):
+      h('div',{className:'card',style:{padding:0,overflow:'hidden'}},
+        h('table',null,
+          h('thead',null,h('tr',null,
+            h('th',null,'Categoria'),h('th',null,'Descri\u00e7\u00e3o'),h('th',{style:{textAlign:'right'}},'Valor'),h('th',null,'Recorr\u00eancia'),h('th',{style:{textAlign:'center'}},'A\u00e7\u00f5es')
+          )),
+          h('tbody',null,exp.expenses.map(function(e){
+            var cat=EXPENSE_CATS[e.category]||EXPENSE_CATS.outros;
+            return h('tr',{key:e.id,className:'trow'},
+              h('td',null,h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h('span',{style:{display:'inline-block',width:8,height:8,borderRadius:4,background:cat.color}}),cat.label)),
+              h('td',{style:{color:'var(--t2)'}},e.description||'\u2014'),
+              h('td',{style:{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:600}},cur(e.amount)),
+              h('td',null,h('span',{className:'badge',style:{background:'rgba(110,159,255,.1)',color:'#6E9FFF'}},RECURRENCE_LABELS[e.recurrence]||e.recurrence)),
+              h('td',{style:{textAlign:'center'}},
+                h('button',{onClick:function(){openExpenseModal(e)},style:{background:'none',border:'none',color:'var(--accent)',cursor:'pointer',fontSize:12,fontFamily:'Inter',marginRight:8}},'Editar'),
+                h('button',{onClick:function(){deleteExpense(e.id)},style:{background:'none',border:'none',color:'var(--rose)',cursor:'pointer',fontSize:12,fontFamily:'Inter'}},'Excluir')
+              )
+            );
+          })),
+          h('tfoot',null,h('tr',null,
+            h('td',{colSpan:2,style:{fontWeight:600}},'Total'),
+            h('td',{style:{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:700,color:'#34D399',fontSize:16}},cur(exp.total)),
+            h('td',{colSpan:2})
+          ))
+        )
+      )
+    ):null,
+
+    // TAB 3: DRE & Health
+    tab==='dre'?h('div',null,
+      h('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
+        h('button',{onClick:function(){changeMonth(-1)},style:{background:'none',border:'1px solid var(--bdr)',borderRadius:8,color:'var(--t1)',cursor:'pointer',padding:'6px 12px',fontSize:14,fontFamily:'Inter'}},'\u2190'),
+        h('span',{style:{fontSize:16,fontWeight:600,minWidth:160,textAlign:'center'}},monthLabel(cm)),
+        h('button',{onClick:function(){changeMonth(1)},style:{background:'none',border:'1px solid var(--bdr)',borderRadius:8,color:'var(--t1)',cursor:'pointer',padding:'6px 12px',fontSize:14,fontFamily:'Inter'}},'\u2192')
+      ),
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}},
+        // DRE Card
+        dre?h('div',{className:'card',style:{fontFamily:'JetBrains Mono',fontSize:13}},
+          h('h3',{style:{fontSize:16,fontWeight:700,marginBottom:16,fontFamily:'Inter',color:'var(--t1)'}},'DRE Simplificado'),
+          h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+            dreRow('Receita Bruta',dre.receitaBruta,'#34D399',true),
+            dreRow('(-) Cancelamentos',dre.cancelamentos,'#F43F5E'),
+            dreSep(),
+            dreRow('= Receita L\u00edquida',dre.receitaLiquida,'#6E9FFF',true),
+            dreRow('(-) Impostos ('+dre.taxRate+'%)',dre.impostos,'#F43F5E'),
+            dreRow('(-) Taxa Cart\u00e3o ('+dre.cardFeeRate+'%)',dre.taxaCartao,'#F43F5E'),
+            dreRow('(-) Custos Operacionais',dre.custosOperacionais,'#FBBF24'),
+            dreRow('(-) Custo IA',dre.custoIA,'#06B6D4'),
+            h('div',{style:{borderTop:'2px solid var(--bdr)',paddingTop:12,marginTop:4}}),
+            dreRow('= LUCRO L\u00cdQUIDO',dre.lucroLiquido,dre.lucroLiquido>=0?'#34D399':'#F43F5E',true),
+            dreRow('Margem',dre.margem+'%',dre.margem>=20?'#34D399':dre.margem>=0?'#FBBF24':'#F43F5E')
+          )
+        ):h('div',{className:'card'},h(Ld)),
+
+        // Health Score
+        hs?h('div',{className:'card',style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}},
+          h('h3',{style:{fontSize:16,fontWeight:700,marginBottom:20,fontFamily:'Inter',alignSelf:'flex-start'}},'Sa\u00fade Financeira'),
+          h('div',{style:{position:'relative',width:160,height:160,marginBottom:16}},
+            h('svg',{width:160,height:160,viewBox:'0 0 160 160'},
+              h('circle',{cx:80,cy:80,r:70,fill:'none',stroke:'rgba(255,255,255,.06)',strokeWidth:10}),
+              h('circle',{cx:80,cy:80,r:70,fill:'none',stroke:hs.score>=80?'#34D399':hs.score>=60?'#6E9FFF':hs.score>=40?'#FBBF24':'#F43F5E',strokeWidth:10,strokeDasharray:''+(2*Math.PI*70),strokeDashoffset:''+((1-hs.score/100)*2*Math.PI*70),strokeLinecap:'round',transform:'rotate(-90 80 80)',style:{transition:'stroke-dashoffset .8s ease'}})
+            ),
+            h('div',{style:{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',textAlign:'center'}},
+              h('div',{style:{fontFamily:'JetBrains Mono',fontSize:36,fontWeight:700,color:hs.score>=80?'#34D399':hs.score>=60?'#6E9FFF':hs.score>=40?'#FBBF24':'#F43F5E'}},hs.score),
+              h('div',{style:{fontSize:11,color:'var(--t3)'}},hs.score>=80?'Excelente':hs.score>=60?'Bom':hs.score>=40?'Aten\u00e7\u00e3o':'Cr\u00edtico')
+            )
+          ),
+          // Breakdown bars
+          h('div',{style:{width:'100%',display:'flex',flexDirection:'column',gap:6}},
+            hsBar('Margem',hs.breakdown.margem.score,0.30),
+            hsBar('Tend\u00eancia',hs.breakdown.tendencia.score,0.25),
+            hsBar('Cancelamentos',hs.breakdown.cancelamento.score,0.20),
+            hsBar('Ocupa\u00e7\u00e3o',hs.breakdown.ocupacao.score,0.15),
+            hsBar('ROI Juca',hs.breakdown.roiJuca.score,0.10)
+          )
+        ):h('div',{className:'card'},h(Ld))
+      ),
+      // Alerts
+      hs&&hs.alerts&&hs.alerts.length>0?h('div',{className:'card'},
+        h('h3',{style:{fontSize:15,fontWeight:600,marginBottom:12}},'\uD83D\uDCA1 Insights Financeiros'),
+        hs.alerts.map(function(a,i){
+          var cls=a.type==='success'?'ins-s':a.type==='danger'||a.type==='warning'?'ins-w':'ins-n';
+          var icon=a.type==='success'?'\u2705':a.type==='danger'?'\u26A0\uFE0F':a.type==='warning'?'\u26A0\uFE0F':'\uD83D\uDCA1';
+          return h('div',{key:i,className:'insight '+cls},h('span',null,icon),a.message);
+        })
+      ):null
+    ):null,
+
+    // Expense Modal
+    mo==='expense'?h('div',{className:'modal-overlay',onClick:function(e){if(e.target===e.currentTarget)sMo(null)}},
+      h('div',{className:'modal-content',style:{maxWidth:500}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+          h('h3',{style:{fontSize:18,fontWeight:700}},ef.id?'Editar Despesa':'Nova Despesa'),
+          h('button',{onClick:function(){sMo(null)},style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:22}},'\u00D7')
+        ),
+        h('div',{className:'form-row'},
+          h('div',null,
+            h('label',null,'Categoria'),
+            h('select',{value:ef.category||'',onChange:function(e){sEf(Object.assign({},ef,{category:e.target.value}))}},
+              h('option',{value:''},'Selecione...'),
+              Object.keys(EXPENSE_CATS).map(function(k){return h('option',{key:k,value:k},EXPENSE_CATS[k].label)})
+            )
+          ),
+          h('div',null,
+            h('label',null,'Recorr\u00eancia'),
+            h('select',{value:ef.recurrence||'monthly',onChange:function(e){sEf(Object.assign({},ef,{recurrence:e.target.value}))}},
+              h('option',{value:'monthly'},'Mensal'),
+              h('option',{value:'one_time'},'\u00danico'),
+              h('option',{value:'weekly'},'Semanal'),
+              h('option',{value:'annual'},'Anual')
+            )
+          )
+        ),
+        h('div',{className:'form-row'},
+          h('div',null,
+            h('label',null,'Valor (R$)'),
+            h('input',{type:'number',step:'0.01',min:'0.01',value:ef.amount||'',placeholder:'0,00',onChange:function(e){sEf(Object.assign({},ef,{amount:e.target.value}))}})
+          ),
+          h('div',null,
+            h('label',null,'M\u00eas Refer\u00eancia'),
+            h('input',{type:'month',value:ef.reference_month||cm,onChange:function(e){sEf(Object.assign({},ef,{reference_month:e.target.value}))}})
+          )
+        ),
+        h('div',{style:{marginBottom:16}},
+          h('label',{style:{display:'block',fontSize:11,color:'var(--t3)',marginBottom:4,fontWeight:500,textTransform:'uppercase',letterSpacing:'.04em'}},'Descri\u00e7\u00e3o'),
+          h('input',{type:'text',style:{width:'100%'},value:ef.description||'',placeholder:'Opcional',onChange:function(e){sEf(Object.assign({},ef,{description:e.target.value}))}})
+        ),
+        h('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+          h('button',{onClick:function(){sMo(null)},style:{padding:'8px 18px',borderRadius:8,border:'1px solid var(--bdr)',background:'none',color:'var(--t2)',cursor:'pointer',fontFamily:'Inter',fontSize:13}},'Cancelar'),
+          h('button',{className:'btn',onClick:saveExpense,disabled:saving},saving?'Salvando...':'Salvar')
+        )
+      )
+    ):null
+  );
+}
+
+function dreRow(label,value,color,bold){
+  return h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0'}},
+    h('span',{style:{color:'var(--t2)',fontWeight:bold?600:400,fontSize:13}},label),
+    h('span',{style:{color:color,fontWeight:bold?700:500,fontSize:bold?15:13}},typeof value==='number'?cur(value):value)
+  );
+}
+function dreSep(){return h('div',{style:{borderTop:'1px solid var(--bdr)',margin:'4px 0'}})}
+function hsBar(label,score,weight){
+  return h('div',{style:{display:'flex',alignItems:'center',gap:8,fontSize:11}},
+    h('span',{style:{width:90,color:'var(--t3)',flexShrink:0}},label),
+    h('div',{style:{flex:1,height:6,borderRadius:3,background:'rgba(255,255,255,.06)',overflow:'hidden'}},
+      h('div',{style:{width:score+'%',height:'100%',borderRadius:3,background:score>=80?'#34D399':score>=60?'#6E9FFF':score>=40?'#FBBF24':'#F43F5E',transition:'width .6s ease'}})
+    ),
+    h('span',{style:{width:28,textAlign:'right',color:'var(--t2)',fontFamily:'JetBrains Mono',fontSize:10}},score)
+  );
+}
+
 /* ===== APP ===== */
 function App(){
   var _p=us('overview'),pg=_p[0],sP=_p[1];
@@ -879,6 +1212,7 @@ function App(){
     {id:'patients',l:'Pacientes',i:'\uD83D\uDC65'},
     {id:'tasks',l:'Tarefas',i:'\u2705',badge:pendingTasks>0?pendingTasks:null},
     {id:'agenda',l:'Agenda',i:'\uD83D\uDCC5'},
+    {id:'financial',l:'Financeiro',i:'\uD83D\uDCB0'},
     {id:'report',l:'Relat\u00f3rio',i:'\uD83D\uDCDD'}
   ];
 
@@ -888,6 +1222,7 @@ function App(){
     if(pg==='timeline'&&sel)return h(T3,{pid:sel.id,pn:sel.n,onBack:function(){sP('patients')}});
     if(pg==='tasks')return h(T4,{taskSummary:taskSum,onOpenPatient:onOpenPatient,role:role});
     if(pg==='agenda')return h(T5);
+    if(pg==='financial')return h(FinancialPage,{role:role});
     if(pg==='report')return h(T6,{role:role});
     return h(T1,{role:role,onOpenPatient:onOpenPatient});
   }
@@ -923,7 +1258,7 @@ function App(){
             h('span',{className:'badge',style:{background:isOwner?'rgba(52,211,153,.1)':'rgba(139,92,246,.1)',color:isOwner?'#34D399':'#8B5CF6',fontSize:10}},isOwner?'Administrador':'Recepcionista'),
             h('button',{onClick:logout,style:{background:'none',border:'none',color:'var(--t3)',cursor:'pointer',fontSize:11,fontFamily:'Inter'}},'Sair')
           ),
-          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.3 F9F')
+          h('div',{style:{fontSize:10,color:'var(--t3)',marginTop:10,opacity:.6}},'v4.4 F10')
         )
       ),
       h('main',{className:'mn',style:{flex:1,padding:32,overflowY:'auto',maxHeight:'100vh',position:'relative'}},

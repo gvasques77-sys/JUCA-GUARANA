@@ -16,6 +16,7 @@ import { processPostConversation } from './services/crmService.js';
 import { startTaskProcessor } from './services/taskProcessor.js';
 import { createCrmApiRouter } from './routes/crmDashboardRoutes.js';
 import campaignRoutes from './routes/campaignRoutes.js';
+import financialRoutes from './routes/financialRoutes.js';
 import { startCampaignScheduler } from './services/campaignService.js';
 import { authMiddleware } from './middleware/authMiddleware.js';
 
@@ -237,6 +238,9 @@ const supabase = createClient(
 
 // — F9D: Campaign API (must be before generic CRM routes) —
 app.use('/crm/api/campaigns', authMiddleware(supabase), campaignRoutes);
+
+// — F10: Financial API (must be before generic CRM routes) —
+app.use('/crm/api/financial', authMiddleware(supabase), financialRoutes);
 
 // — CRM Dashboard API (montada aqui porque depende do supabase client) —
 app.use('/crm/api', createCrmApiRouter(supabase));
